@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,22 +21,25 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-/*
- * Modification History
- *
- * March 31, 2000		Allan Nathanson <ajn@apple.com>
- * - initial revision
- */
+#ifndef _VLANCONFIGURATIONPRIVATE_H
+#define _VLANCONFIGURATIONPRIVATE_H
 
-#ifndef _S_NOTIFY_H
-#define _S_NOTIFY_H
 
 #include <sys/cdefs.h>
+#include <CoreFoundation/CoreFoundation.h>
+
+
+#define VLAN_PREFERENCES_ID	CFSTR("VirtualNetworkInterfaces.plist")
+
 
 __BEGIN_DECLS
 
-void		pushNotifications	();
+CFArrayRef
+_VLANPreferencesCopyActiveInterfaces	();
+
+Boolean
+_VLANPreferencesUpdateConfiguration	(VLANPreferencesRef	prefs);
 
 __END_DECLS
 
-#endif /* !_S_NOTIFY_H */
+#endif /* _VLANCONFIGURATIONPRIVATE_H */
