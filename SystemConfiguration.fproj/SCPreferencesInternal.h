@@ -20,15 +20,16 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _SCPPRIVATE_H
-#define _SCPPRIVATE_H
-
-#include <SystemConfiguration/SCP.h>
-#include <SystemConfiguration/SCD.h>
+#ifndef _SCPREFERENCESINTERNAL_H
+#define _SCPREFERENCESINTERNAL_H
 
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreFoundation/CFRuntime.h>
+#include <SystemConfiguration/SCPreferences.h>
+#include <SystemConfiguration/SCDynamicStore.h>
 
 
 #define	PREFS_DEFAULT_DIR	CFSTR("/var/db/SystemConfiguration")
@@ -39,6 +40,10 @@
 
 /* Define the per-preference-handle structure */
 typedef struct {
+
+	/* base CFType information */
+	CFRuntimeBase		cfBase;
+
 	/* session name */
 	CFStringRef		name;
 
@@ -46,7 +51,7 @@ typedef struct {
 	CFStringRef		prefsID;
 
 	/* per-user preference info */
-	boolean_t		perUser;
+	Boolean			perUser;
 	CFStringRef		user;
 
 	/* configuration file path */
@@ -56,7 +61,7 @@ typedef struct {
 	CFDataRef		signature;
 
 	/* configd session */
-	SCDSessionRef		session;
+	SCDynamicStoreRef	session;
 
 	/* configd session keys */
 	CFStringRef		sessionKeyLock;
@@ -67,35 +72,48 @@ typedef struct {
 	CFMutableDictionaryRef	prefs;
 
 	/* flags */
-	boolean_t		changed;
-	boolean_t		locked;
-	boolean_t		isRoot;
+	Boolean			accessed;
+	Boolean			changed;
+	Boolean			locked;
+	Boolean			isRoot;
 
-} SCPSessionPrivate, *SCPSessionPrivateRef;
+} SCPreferencesPrivate, *SCPreferencesPrivateRef;
 
 
 /* Define signature data */
 typedef struct {
-	dev_t     st_dev;               /* inode's device */
-	ino_t     st_ino;               /* inode's number */
-	struct  timespec st_mtimespec;  /* time of last data modification */
-	off_t     st_size;              /* file size, in bytes */
+	dev_t			st_dev;		/* inode's device */
+	ino_t			st_ino;		/* inode's number */
+	struct  timespec	st_mtimespec;	/* time of last data modification */
+	off_t			st_size;	/* file size, in bytes */
 } SCPSignatureData, *SCPSignatureDataRef;
 
 
 __BEGIN_DECLS
 
-CFDataRef	_SCPSignatureFromStatbuf	(const struct stat	*statBuf);
+SCPreferencesRef
+__SCPreferencesCreate			(CFAllocatorRef		allocator,
+					 CFStringRef		name,
+					 CFStringRef		prefsID,
+					 Boolean		perUser,
+					 CFStringRef		user);
 
-char *		_SCPPrefsPath			(CFStringRef		prefsID,
-						 boolean_t		perUser,
-						 CFStringRef		user);
+CFDataRef
+__SCPSignatureFromStatbuf		(const struct stat	*statBuf);
 
-CFStringRef	_SCPNotificationKey		(CFStringRef		prefsID,
-						 boolean_t		perUser,
-						 CFStringRef		user,
-						 int			keyType);
+char *
+__SCPreferencesPath			(CFAllocatorRef		allocator,
+					 CFStringRef		prefsID,
+					 Boolean		perUser,
+					 CFStringRef		user);
+
+CFStringRef
+_SCPNotificationKey			(CFAllocatorRef		allocator,
+					 CFStringRef		prefsID,
+					 Boolean		perUser,
+					 CFStringRef		user,
+					 int			keyType);
 
 __END_DECLS
 
-#endif /* _SCPPRIVATE_H */
+#endif /* _SCPREFERENCESINTERNAL_H */
