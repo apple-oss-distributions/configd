@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -23,7 +23,7 @@
 /*
  * Modification History
  *
- * May 18, 2001			Allan Nathanson <ajn@apple.com>
+ * Nov 28, 2001			Allan Nathanson <ajn@apple.com>
  * - initial revision
  */
 
@@ -32,25 +32,23 @@
 #include <SystemConfiguration/SCPrivate.h>
 
 CFStringRef
-SCDynamicStoreKeyCreateProxies(CFAllocatorRef allocator)
+SCDynamicStoreKeyCreateLocation(CFAllocatorRef allocator)
 {
-	return SCDynamicStoreKeyCreateNetworkGlobalEntity(allocator,
-							  kSCDynamicStoreDomainState,
-							  kSCEntNetProxies);
+	return CFRetain(kSCDynamicStoreDomainSetup);
 }
 
 
-CFDictionaryRef
-SCDynamicStoreCopyProxies(SCDynamicStoreRef store)
+CFStringRef
+SCDynamicStoreCopyLocation(SCDynamicStoreRef store)
 {
 	CFDictionaryRef		dict		= NULL;
 	CFStringRef		key;
-	CFDictionaryRef		proxies		= NULL;
+	CFStringRef		location	= NULL;
 	Boolean			tempSession	= FALSE;
 
 	if (!store) {
 		store = SCDynamicStoreCreate(NULL,
-					     CFSTR("SCDynamicStoreCopyConsoleUser"),
+					     CFSTR("SCDynamicStoreCopyLocation"),
 					     NULL,
 					     NULL);
 		if (!store) {
@@ -60,7 +58,7 @@ SCDynamicStoreCopyProxies(SCDynamicStoreRef store)
 		tempSession = TRUE;
 	}
 
-	key  = SCDynamicStoreKeyCreateProxies(NULL);
+	key  = SCDynamicStoreKeyCreateLocation(NULL);
 	dict = SCDynamicStoreCopyValue(store, key);
 	CFRelease(key);
 	if (!isA_CFDictionary(dict)) {
@@ -68,11 +66,18 @@ SCDynamicStoreCopyProxies(SCDynamicStoreRef store)
 		goto done;
 	}
 
-	proxies = CFRetain(dict);
+	location = CFDictionaryGetValue(dict, kSCDynamicStorePropSetupCurrentSet);
+	if (!isA_CFString(location)) {
+		_SCErrorSet(kSCStatusNoKey);
+		goto done;
+	}
+
+	CFRetain(location);
 
     done :
 
 	if (tempSession)	CFRelease(store);
 	if (dict)		CFRelease(dict);
-	return proxies;
+
+	return location;
 }

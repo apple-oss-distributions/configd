@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -23,40 +23,37 @@
 /*
  * Modification History
  *
- * June 1, 2001			Allan Nathanson <ajn@apple.com>
- * - public API conversion
- *
- * November 9, 2000		Allan Nathanson <ajn@apple.com>
- * - initial revision
  */
 
-#ifndef _SC_H
-#define _SC_H
+#ifndef _MOH_H
+#define _MOH_H
 
 #include <sys/cdefs.h>
-
-#include <SystemConfiguration/SystemConfiguration.h>
-#include <SystemConfiguration/SCValidation.h>
-#include <SystemConfiguration/SCPrivate.h>
-
-
-extern int			nesting;
-extern CFRunLoopSourceRef	notifyRls;
-extern CFMutableArrayRef	sources;
-extern SCDynamicStoreRef	store;
-extern CFPropertyListRef	value;
-
+#include <CoreFoundation/CoreFoundation.h>
 
 __BEGIN_DECLS
 
-Boolean	process_line		(FILE	*fp);
+int
+MOHInit		(
+		int		*ref,
+		CFStringRef	deviceName
+		);
 
-void		runLoopProcessInput	(CFSocketRef		s,
-					 CFSocketCallBackType	type,
-					 CFDataRef		address,
-					 const void		*data,
-					 void			*info);
+int
+MOHDispose	(
+		int		ref
+		);
+
+int
+MOHExec		(int		ref,
+		u_long		link,
+		u_int32_t	cmd,
+		void		*request,
+		u_long		requestLen,
+		void		**reply,
+		u_long		*replyLen
+		);
 
 __END_DECLS
 
-#endif /* !_SC_H */
+#endif	/* _MOH_H */
