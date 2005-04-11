@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -42,22 +40,23 @@
 #include "SCPreferencesInternal.h"
 
 CFPropertyListRef
-SCPreferencesGetValue(SCPreferencesRef session, CFStringRef key)
+SCPreferencesGetValue(SCPreferencesRef prefs, CFStringRef key)
 {
-	SCPreferencesPrivateRef	sessionPrivate	= (SCPreferencesPrivateRef)session;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
 	CFPropertyListRef	value;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCPreferencesGetValue:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key   = %@"), key);
+	if (prefs == NULL) {
+		/* sorry, you must provide a session */
+		_SCErrorSet(kSCStatusNoPrefsSession);
+		return NULL;
 	}
 
-	sessionPrivate->accessed = TRUE;
-	value = CFDictionaryGetValue(sessionPrivate->prefs, key);
-	if (!value) {
+	__SCPreferencesAccess(prefs);
+
+	value = CFDictionaryGetValue(prefsPrivate->prefs, key);
+	if (value == NULL) {
 		_SCErrorSet(kSCStatusNoKey);
 	}
 
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("  value = %@"), value);
 	return value;
 }

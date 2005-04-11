@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -56,6 +54,20 @@ _IOMasterPort				(
 					);
 #define IOMasterPort _IOMasterPort
 
+boolean_t
+_IOObjectConformsTo			(
+					io_object_t		object,
+					const io_name_t		className
+					);
+#define IOObjectConformsTo _IOObjectConformsTo
+
+boolean_t
+_IOObjectGetClass			(
+					io_object_t		object,
+					io_name_t		className
+					);
+#define IOObjectGetClass _IOObjectGetClass
+
 kern_return_t
 _IOObjectRelease			(
 					io_object_t		object
@@ -81,6 +93,22 @@ _IORegistryEntryCreateCFProperties	(
 #define IORegistryEntryCreateCFProperties _IORegistryEntryCreateCFProperties
 
 kern_return_t
+_IORegistryEntryCreateIterator		(
+					io_registry_entry_t	entry,
+					const io_name_t		plane,
+					IOOptionBits		options,
+					io_iterator_t		*iterator
+					);
+#define IORegistryEntryCreateIterator _IORegistryEntryCreateIterator
+
+kern_return_t
+_IORegistryEntryGetName			(
+					io_registry_entry_t	entry,
+					io_name_t               name
+					);
+#define	IORegistryEntryGetName _IORegistryEntryGetName
+
+kern_return_t
 _IORegistryEntryGetParentEntry		(
 					io_registry_entry_t	entry,
 					const io_name_t		plane,
@@ -95,6 +123,16 @@ _IORegistryEntryGetPath			(
 					io_string_t		path
 					);
 #define IORegistryEntryGetPath _IORegistryEntryGetPath
+
+CFTypeRef
+_IORegistryEntrySearchCFProperty	(
+					io_registry_entry_t     entry,
+					const io_name_t         plane,
+					CFStringRef             key,
+					CFAllocatorRef          allocator,
+					IOOptionBits            options
+					);
+#define IORegistryEntrySearchCFProperty _IORegistryEntrySearchCFProperty
 
 kern_return_t
 _IOServiceGetMatchingServices		(

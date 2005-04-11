@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -58,9 +56,7 @@ SCDynamicStoreNotifyFileDescriptor(SCDynamicStoreRef	store,
 	struct sockaddr_un		un;
 	int				sock;
 
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreNotifyFileDescriptor:"));
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
 		return FALSE;
@@ -80,7 +76,7 @@ SCDynamicStoreNotifyFileDescriptor(SCDynamicStoreRef	store,
 
 	if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
 		_SCErrorSet(errno);
-		SCLog(_sc_verbose, LOG_NOTICE, CFSTR("socket: %s"), strerror(errno));
+		SCLog(TRUE, LOG_NOTICE, CFSTR("SCDynamicStoreNotifyFileDescriptor socket(): %s"), strerror(errno));
 		return FALSE;
 	}
 
@@ -96,14 +92,14 @@ SCDynamicStoreNotifyFileDescriptor(SCDynamicStoreRef	store,
 
 	if (bind(sock, (struct sockaddr *)&un, sizeof(un)) == -1) {
 		_SCErrorSet(errno);
-		SCLog(_sc_verbose, LOG_NOTICE, CFSTR("bind: %s"), strerror(errno));
+		SCLog(TRUE, LOG_NOTICE, CFSTR("SCDynamicStoreNotifyFileDescriptor bind(): %s"), strerror(errno));
 		(void) close(sock);
 		return FALSE;
 	}
 
 	if (listen(sock, 0) == -1) {
 		_SCErrorSet(errno);
-		SCLog(_sc_verbose, LOG_NOTICE, CFSTR("listen: %s"), strerror(errno));
+		SCLog(TRUE, LOG_NOTICE, CFSTR("SCDynamicStoreNotifyFileDescriptor listen(): %s"), strerror(errno));
 		(void) close(sock);
 		return FALSE;
 	}
@@ -115,8 +111,10 @@ SCDynamicStoreNotifyFileDescriptor(SCDynamicStoreRef	store,
 			     (int *)&sc_status);
 
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("notifyviafd(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreNotifyFileDescriptor notifyviafd(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);
@@ -126,7 +124,7 @@ SCDynamicStoreNotifyFileDescriptor(SCDynamicStoreRef	store,
 	*fd = accept(sock, 0, 0);
 	if (*fd == -1) {
 		_SCErrorSet(errno);
-		SCLog(_sc_verbose, LOG_NOTICE, CFSTR("accept: %s"), strerror(errno));
+		SCLog(TRUE, LOG_NOTICE, CFSTR("SCDynamicStoreNotifyFileDescriptor accept(): %s"), strerror(errno));
 		(void) close(sock);
 		return FALSE;
 	}

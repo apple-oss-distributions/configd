@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -58,10 +56,7 @@ typedef struct {
 
 	/* per-session flags */
 	Boolean				locked;
-
-	/* SCDynamicStoreKeys being watched */
-	CFMutableSetRef			keys;
-	CFMutableSetRef			patterns;
+	Boolean				useSessionKeys;
 
 	/* current status of notification requests */
 	__SCDynamicStoreNotificationStatus	notifyStatus;
@@ -76,8 +71,11 @@ typedef struct {
 	SCDynamicStoreCallBack_v1	callbackFunction;
 	void				*callbackArgument;
 	CFMachPortRef			callbackPort;
-	CFRunLoopRef			callbackRunLoop;
-	CFRunLoopSourceRef		callbackRunLoopSource;
+	CFRunLoopSourceRef		callbackRLS;
+
+	/* "server" SCDynamicStoreKeys being watched */
+	CFMutableSetRef			keys;
+	CFMutableSetRef			patterns;
 
 	/* "server" information associated with SCDynamicStoreNotifyMachPort() */
 	mach_port_t			notifyPort;

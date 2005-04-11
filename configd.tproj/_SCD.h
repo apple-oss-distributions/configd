@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -29,7 +27,7 @@
  * June 1, 2001			Allan Nathanson <ajn@apple.com>
  * - public API conversion
  *
- * June 2, 2000		Allan Nathanson <ajn@apple.com>
+ * June 2, 2000			Allan Nathanson <ajn@apple.com>
  * - initial revision
  */
 
@@ -121,12 +119,8 @@ __SCDynamicStoreCopyKeyList		(SCDynamicStoreRef	store,
 int
 __SCDynamicStoreAddValue		(SCDynamicStoreRef	store,
 					 CFStringRef		key,
-					 CFDataRef		value);
-
-int
-__SCDynamicStoreAddTemporaryValue	(SCDynamicStoreRef	store,
-					 CFStringRef		key,
-					 CFDataRef		value);
+					 CFDataRef		value,
+					 Boolean		internal);
 
 int
 __SCDynamicStoreCopyValue		(SCDynamicStoreRef	store,
@@ -218,6 +212,9 @@ _addWatcher				(CFNumberRef		sessionNum,
 void
 _removeWatcher				(CFNumberRef		sessionNum,
 					 CFStringRef		watchedKey);
+
+void
+pushNotifications			();
 
 __END_DECLS
 

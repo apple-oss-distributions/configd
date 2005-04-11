@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -43,11 +41,6 @@ __SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key, CFDataRef *v
 	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
 	CFDictionaryRef			dict;
 
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("__SCDynamicStoreCopyValue:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key      = %@"), key);
-	}
-
 	if (!store || (storePrivate->server == MACH_PORT_NULL)) {
 		return kSCStatusNoStoreSession;	/* you must have an open session to play */
 	}
@@ -69,14 +62,6 @@ __SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key, CFDataRef *v
 	/* Return the data associated with the key */
 	*value = CFRetain(CFDictionaryGetValue(dict, kSCDData));
 
-	if (_configd_verbose) {
-		CFPropertyListRef	val;
-
-		(void) _SCUnserialize(&val, *value, NULL, NULL);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  value    = %@"), val);
-		CFRelease(val);
-	}
-
 	return kSCStatusOK;
 }
 
@@ -91,15 +76,10 @@ _configget(mach_port_t			server,
 	   int				*sc_status
 )
 {
-	CFStringRef		key;		/* key  (un-serialized) */
-	serverSessionRef	mySession = getSession(server);
+	CFStringRef		key		= NULL;		/* key  (un-serialized) */
+	serverSessionRef	mySession	= getSession(server);
 	Boolean			ok;
 	CFDataRef		value;
-
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("Get key from configuration database."));
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("  server = %d"), server);
-	}
 
 	*dataRef = NULL;
 	*dataLen = 0;
@@ -107,25 +87,22 @@ _configget(mach_port_t			server,
 	/* un-serialize the key */
 	if (!_SCUnserializeString(&key, NULL, (void *)keyRef, keyLen)) {
 		*sc_status = kSCStatusFailed;
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	if (!isA_CFString(key)) {
 		*sc_status = kSCStatusInvalidArgument;
-		CFRelease(key);
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	if (!mySession) {
 		*sc_status = kSCStatusNoStoreSession;	/* you must have an open session to play */
-		CFRelease(key);
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	*sc_status = __SCDynamicStoreCopyValue(mySession->store, key, &value, FALSE);
-	CFRelease(key);
 	if (*sc_status != kSCStatusOK) {
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	/* serialize the data */
@@ -133,7 +110,7 @@ _configget(mach_port_t			server,
 	CFRelease(value);
 	if (!ok) {
 		*sc_status = kSCStatusFailed;
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	/*
@@ -141,6 +118,9 @@ _configget(mach_port_t			server,
 	 */
 	*newInstance = 1;
 
+    done :
+
+	if (key)	CFRelease(key);
 	return KERN_SUCCESS;
 }
 
@@ -204,12 +184,6 @@ __SCDynamicStoreCopyMultiple(SCDynamicStoreRef store, CFArrayRef keys, CFArrayRe
 	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
 	addSpecific			myContext;
 
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("__SCDynamicStoreCopyMultiple:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  keys     = %@"), keys);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  patterns = %@"), patterns);
-	}
-
 	if (!store || (storePrivate->server == MACH_PORT_NULL)) {
 		return kSCStatusNoStoreSession;	/* you must have an open session to play */
 	}
@@ -245,14 +219,6 @@ __SCDynamicStoreCopyMultiple(SCDynamicStoreRef store, CFArrayRef keys, CFArrayRe
 	/* Return the keys/values associated with the key */
 	*values = myContext.dict;
 
-	if (_configd_verbose) {
-		CFDictionaryRef	expDict;
-
-		expDict = _SCUnserializeMultiple(*values);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  values   = %@"), expDict);
-		CFRelease(expDict);
-	}
-
 	return kSCStatusOK;
 }
 
@@ -273,23 +239,19 @@ _configget_m(mach_port_t		server,
 	Boolean			ok;
 	CFArrayRef		patterns	= NULL;	/* patterns (un-serialized) */
 
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("Get keys from configuration database."));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  server = %d"), server);
-	}
-
 	*dataRef = NULL;
 	*dataLen = 0;
-	*sc_status = kSCStatusOK;
 
 	if (keysRef && (keysLen > 0)) {
 		/* un-serialize the keys */
 		if (!_SCUnserialize((CFPropertyListRef *)&keys, NULL, (void *)keysRef, keysLen)) {
 			*sc_status = kSCStatusFailed;
+			goto done;
 		}
 
 		if (!isA_CFArray(keys)) {
 			*sc_status = kSCStatusInvalidArgument;
+			goto done;
 		}
 	}
 
@@ -297,34 +259,33 @@ _configget_m(mach_port_t		server,
 		/* un-serialize the patterns */
 		if (!_SCUnserialize((CFPropertyListRef *)&patterns, NULL, (void *)patternsRef, patternsLen)) {
 			*sc_status = kSCStatusFailed;
+			goto done;
 		}
 
 		if (!isA_CFArray(patterns)) {
 			*sc_status = kSCStatusInvalidArgument;
+			goto done;
 		}
 	}
 
 	if (!mySession) {
 		*sc_status = kSCStatusNoStoreSession;	/* you must have an open session to play */
+		goto done;
 	}
 
-	if (*sc_status != kSCStatusOK) {
-		if (keys)	CFRelease(keys);
-		if (patterns)	CFRelease(patterns);
-		return KERN_SUCCESS;
-	}
-
+	/* fetch the requested information */
 	*sc_status = __SCDynamicStoreCopyMultiple(mySession->store, keys, patterns, &dict);
-	if (keys)	CFRelease(keys);
-	if (patterns)	CFRelease(patterns);
 
 	/* serialize the dictionary of matching keys/patterns */
 	ok = _SCSerialize(dict, NULL, (void **)dataRef, (CFIndex *)dataLen);
 	CFRelease(dict);
 	if (!ok) {
 		*sc_status = kSCStatusFailed;
-		return KERN_SUCCESS;
 	}
 
+    done :
+
+	if (keys)	CFRelease(keys);
+	if (patterns)	CFRelease(patterns);
 	return KERN_SUCCESS;
 }

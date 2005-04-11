@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -38,24 +36,24 @@
 #include "SCPreferencesInternal.h"
 
 Boolean
-SCPreferencesAddValue(SCPreferencesRef session, CFStringRef key, CFPropertyListRef value)
+SCPreferencesAddValue(SCPreferencesRef prefs, CFStringRef key, CFPropertyListRef value)
 {
-	SCPreferencesPrivateRef	sessionPrivate	= (SCPreferencesPrivateRef)session;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCPreferencesAddValue:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key   = %@"), key);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  value = %@"), value);
+	if (prefs == NULL) {
+		/* sorry, you must provide a session */
+		_SCErrorSet(kSCStatusNoPrefsSession);
+		return FALSE;
 	}
 
-	sessionPrivate->accessed = TRUE;
+	__SCPreferencesAccess(prefs);
 
-	if (CFDictionaryContainsKey(sessionPrivate->prefs, key)) {
+	if (CFDictionaryContainsKey(prefsPrivate->prefs, key)) {
 		_SCErrorSet(kSCStatusKeyExists);
 		return FALSE;
 	}
 
-	CFDictionaryAddValue(sessionPrivate->prefs, key, value);
-	sessionPrivate->changed  = TRUE;
+	CFDictionaryAddValue(prefsPrivate->prefs, key, value);
+	prefsPrivate->changed  = TRUE;
 	return TRUE;
 }

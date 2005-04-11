@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -49,12 +47,12 @@ SCDynamicStoreCopyLocation(SCDynamicStoreRef store)
 	CFStringRef		location	= NULL;
 	Boolean			tempSession	= FALSE;
 
-	if (!store) {
+	if (store == NULL) {
 		store = SCDynamicStoreCreate(NULL,
 					     CFSTR("SCDynamicStoreCopyLocation"),
 					     NULL,
 					     NULL);
-		if (!store) {
+		if (store == NULL) {
 			SCLog(_sc_verbose, LOG_INFO, CFSTR("SCDynamicStoreCreate() failed"));
 			return NULL;
 		}

@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -108,7 +106,7 @@ DHCPClientPreferencesSetApplicationOptions(CFStringRef applicationID,
 {
     CFMutableDictionaryRef	dict = NULL;
     CFStringRef			path = NULL;
-    SCPreferencesRef		session = NULL;
+    SCPreferencesRef		prefs = NULL;
     Boolean			success = FALSE;
 
     if (applicationID == NULL) {
@@ -118,12 +116,12 @@ DHCPClientPreferencesSetApplicationOptions(CFStringRef applicationID,
     if (path == NULL) {
 	goto done;
     }
-    session = SCPreferencesCreate(NULL, CFSTR("DHCPClientSetAppReqParams"),
-				  CFSTR(DHCPCLIENT_PREFERENCES_ID));
-    if (session == NULL) {
+    prefs = SCPreferencesCreate(NULL, CFSTR("DHCPClientSetAppReqParams"),
+				CFSTR(DHCPCLIENT_PREFERENCES_ID));
+    if (prefs == NULL) {
 	goto done;
     }
-    dict = (CFMutableDictionaryRef)SCPreferencesPathGetValue(session, path);
+    dict = (CFMutableDictionaryRef)SCPreferencesPathGetValue(prefs, path);
     if (dict == NULL) {
 	dict = CFDictionaryCreateMutable(NULL, 0,
 					 &kCFTypeDictionaryKeyCallBacks,
@@ -167,19 +165,19 @@ DHCPClientPreferencesSetApplicationOptions(CFStringRef applicationID,
     else {
 	CFDictionaryRemoveValue(dict, CFSTR(DHCP_REQUESTED_PARAMETER_LIST));
     }
-    if (SCPreferencesLock(session, TRUE)) {
-	success = SCPreferencesPathSetValue(session, path, dict);
+    if (SCPreferencesLock(prefs, TRUE)) {
+	success = SCPreferencesPathSetValue(prefs, path, dict);
 	if (success) {
-	    success = SCPreferencesCommitChanges(session);
+	    success = SCPreferencesCommitChanges(prefs);
 	    if (success) {
-		(void)SCPreferencesApplyChanges(session);
+		(void)SCPreferencesApplyChanges(prefs);
 	    }
 	}
-	(void)SCPreferencesUnlock(session);
+	(void)SCPreferencesUnlock(prefs);
     }
  done:
-    if (session) {
-	CFRelease(session);
+    if (prefs) {
+	CFRelease(prefs);
     }
     if (path) {
 	CFRelease(path);
@@ -198,7 +196,7 @@ DHCPClientPreferencesCopyApplicationOptions(CFStringRef applicationID,
     UInt8 *			options = NULL;
     CFArrayRef			parms;
     CFStringRef			path = NULL;
-    SCPreferencesRef		session = NULL;
+    SCPreferencesRef		prefs = NULL;
 
     if (applicationID == NULL) {
 	goto done;
@@ -207,12 +205,12 @@ DHCPClientPreferencesCopyApplicationOptions(CFStringRef applicationID,
     if (path == NULL) {
 	goto done;
     }
-    session = SCPreferencesCreate(NULL, CFSTR("DHCPClientCopyAppReqParams"),
-				  CFSTR(DHCPCLIENT_PREFERENCES_ID));
-    if (session == NULL) {
+    prefs = SCPreferencesCreate(NULL, CFSTR("DHCPClientCopyAppReqParams"),
+				CFSTR(DHCPCLIENT_PREFERENCES_ID));
+    if (prefs == NULL) {
 	goto done;
     }
-    dict = SCPreferencesPathGetValue(session, path);
+    dict = SCPreferencesPathGetValue(prefs, path);
     if (dict == NULL) {
 	goto done;
     }
@@ -224,8 +222,8 @@ DHCPClientPreferencesCopyApplicationOptions(CFStringRef applicationID,
     options = S_get_char_array(parms, count);
 
  done:
-    if (session) {
-	CFRelease(session);
+    if (prefs) {
+	CFRelease(prefs);
     }
     if (path) {
 	CFRelease(path);

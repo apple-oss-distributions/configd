@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -38,23 +36,24 @@
 #include "SCPreferencesInternal.h"
 
 Boolean
-SCPreferencesRemoveValue(SCPreferencesRef session, CFStringRef key)
+SCPreferencesRemoveValue(SCPreferencesRef prefs, CFStringRef key)
 {
-	SCPreferencesPrivateRef	sessionPrivate	= (SCPreferencesPrivateRef)session;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCPreferencesRemoveValue:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key = %@"), key);
+	if (prefs == NULL) {
+		/* sorry, you must provide a session */
+		_SCErrorSet(kSCStatusNoPrefsSession);
+		return FALSE;
 	}
 
-	sessionPrivate->accessed = TRUE;
+	__SCPreferencesAccess(prefs);
 
-	if (!CFDictionaryContainsKey(sessionPrivate->prefs, key)) {
+	if (!CFDictionaryContainsKey(prefsPrivate->prefs, key)) {
 		_SCErrorSet(kSCStatusNoKey);
 		return FALSE;
 	}
 
-	CFDictionaryRemoveValue(sessionPrivate->prefs, key);
-	sessionPrivate->changed  = TRUE;
+	CFDictionaryRemoveValue(prefsPrivate->prefs, key);
+	prefsPrivate->changed  = TRUE;
 	return TRUE;
 }

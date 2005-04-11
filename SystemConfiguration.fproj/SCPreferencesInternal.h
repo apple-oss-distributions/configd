@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -50,6 +48,9 @@ typedef struct {
 	/* base CFType information */
 	CFRuntimeBase		cfBase;
 
+	/* lock */
+	pthread_mutex_t		lock;
+
 	/* session name */
 	CFStringRef		name;
 
@@ -60,7 +61,7 @@ typedef struct {
 	Boolean			perUser;
 	CFStringRef		user;
 
-	/* configuration file path */
+	/* configuration file */
 	char			*path;
 	char			*newPath;
 
@@ -74,6 +75,12 @@ typedef struct {
 	CFStringRef		sessionKeyLock;
 	CFStringRef		sessionKeyCommit;
 	CFStringRef		sessionKeyApply;
+
+	/* run loop source, callout, context, rl scheduling info */
+	CFRunLoopSourceRef      rls;
+	SCPreferencesCallBack	rlsFunction;
+	SCPreferencesContext	rlsContext;
+	CFMutableArrayRef       rlList;
 
 	/* preferences */
 	CFMutableDictionaryRef	prefs;
@@ -104,6 +111,12 @@ __SCPreferencesCreate			(CFAllocatorRef		allocator,
 					 CFStringRef		prefsID,
 					 Boolean		perUser,
 					 CFStringRef		user);
+
+Boolean
+__SCPreferencesAccess			(SCPreferencesRef	prefs);
+
+Boolean
+__SCPreferencesAddSession		(SCPreferencesRef       prefs);
 
 CFDataRef
 __SCPSignatureFromStatbuf		(const struct stat	*statBuf);

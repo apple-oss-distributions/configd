@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -26,6 +24,11 @@
 /*
  * Modification History
  *
+ * January 15, 2004		Allan Nathanson <ajn@apple.com>
+ * - limit location changes to "root" (uid==0), users who are
+ *   a member of group "admin", and processses which have access
+ *   to a local graphics console.
+ *
  * June 1, 2001			Allan Nathanson <ajn@apple.com>
  * - public API conversion
  *
@@ -36,15 +39,24 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <sysexits.h>
+#include <sys/param.h>
+#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/stat.h>
+#include <mach-o/dyld.h>
+#include <grp.h>
 
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPrivate.h>
 
+#include <Security/Security.h>
+#include <Security/AuthSession.h>
 
-Boolean	apply	= TRUE;
+
+static Boolean	apply	= TRUE;
 
 
-static struct option longopts[] = {
+static const struct option longopts[] = {
 //	{ "debug",		no_argument,		0,	'd' },
 //	{ "verbose",		no_argument,		0,	'v' },
 //	{ "do-not-apply",	no_argument,		0,	'n' },
@@ -53,11 +65,93 @@ static struct option longopts[] = {
 };
 
 
-void
+static void
 usage(const char *command)
 {
 	SCPrint(TRUE, stderr, CFSTR("usage: %s [-n] new-set-name\n"), command);
 	exit (EX_USAGE);
+}
+
+
+static Boolean
+isAdmin()
+{
+	gid_t	groups[NGROUPS_MAX];
+	int	ngroups;
+
+	if (getuid() == 0) {
+		return TRUE;	// if "root"
+	}
+
+	ngroups = getgroups(NGROUPS_MAX, groups);
+	if(ngroups > 0) {
+		struct group	*adminGroup;
+
+		adminGroup = getgrnam("admin");
+		if (adminGroup != NULL) {
+			gid_t	adminGid = adminGroup->gr_gid;
+			int	i;
+
+			for (i = 0; i < ngroups; i++) {
+				if (groups[i] == adminGid) {
+					return TRUE;	// if a member of group "admin"
+				}
+			}
+		}
+	}
+
+	return FALSE;
+}
+
+
+static void *
+__loadSecurity(void) {
+	static const void *image = NULL;
+	if (NULL == image) {
+		const char	*framework		= "/System/Library/Frameworks/Security.framework/Security";
+		struct stat	statbuf;
+		const char	*suffix			= getenv("DYLD_IMAGE_SUFFIX");
+		char		path[MAXPATHLEN];
+
+		strcpy(path, framework);
+		if (suffix) strcat(path, suffix);
+		if (0 <= stat(path, &statbuf)) {
+			image = NSAddImage(path, NSADDIMAGE_OPTION_NONE);
+		} else {
+			image = NSAddImage(framework, NSADDIMAGE_OPTION_NONE);
+		}
+	}
+	return (void *)image;
+}
+
+
+static OSStatus
+_SessionGetInfo(SecuritySessionId session, SecuritySessionId *sessionId, SessionAttributeBits *attributes)
+{
+	static OSStatus (*dyfunc)(SecuritySessionId, SecuritySessionId *, SessionAttributeBits *) = NULL;
+	if (!dyfunc) {
+		void *image = __loadSecurity();
+		if (image) dyfunc = NSAddressOfSymbol(NSLookupSymbolInImage(image, "_SessionGetInfo", NSLOOKUPSYMBOLINIMAGE_OPTION_BIND));
+	}
+	return dyfunc ? dyfunc(session, sessionId, attributes) : -1;
+}
+#define SessionGetInfo _SessionGetInfo
+
+
+static Boolean
+hasLocalConsoleAccess()
+{
+	OSStatus		error;
+	SecuritySessionId	sessionID	= 0;
+	SessionAttributeBits	attributeBits	= 0;
+
+	error = SessionGetInfo(callerSecuritySession, &sessionID, &attributeBits);
+	if (error != noErr) {
+		/* Security check failed, must not permit access */
+		return FALSE;
+	}
+
+	return (attributeBits & (sessionHasGraphicAccess|sessionIsRemote)) == sessionHasGraphicAccess;
 }
 
 
@@ -72,7 +166,7 @@ main(int argc, char **argv)
 	CFStringRef		newSet		= NULL;	/* set key */
 	CFStringRef		newSetUDN	= NULL;	/* user defined name */
 	CFStringRef		prefix;
-	SCPreferencesRef	session;
+	SCPreferencesRef	prefs;
 	CFDictionaryRef		sets;
 	CFIndex			nSets;
 	const void		**setKeys	= NULL;
@@ -106,8 +200,8 @@ main(int argc, char **argv)
 			? CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman)
 			: CFSTR("");
 
-	session = SCPreferencesCreate(NULL, CFSTR("Select Set Command"), NULL);
-	if (!session) {
+	prefs = SCPreferencesCreate(NULL, CFSTR("Select Set Command"), NULL);
+	if (prefs == NULL) {
 		SCPrint(TRUE, stderr, CFSTR("SCPreferencesCreate() failed\n"));
 		exit (1);
 	}
@@ -130,14 +224,14 @@ main(int argc, char **argv)
 		newSet = str;
 	}
 
-	sets = SCPreferencesGetValue(session, kSCPrefSets);
-	if (!sets) {
-		SCPrint(TRUE, stderr, CFSTR("SCPreferencesGetValue(...,%s,...) failed\n"));
+	sets = SCPreferencesGetValue(prefs, kSCPrefSets);
+	if (sets == NULL) {
+		SCPrint(TRUE, stderr, CFSTR("No network sets defined.\n"));
 		exit (1);
 	}
 
-	current = SCPreferencesGetValue(session, kSCPrefCurrentSet);
-	if (current) {
+	current = SCPreferencesGetValue(prefs, kSCPrefCurrentSet);
+	if (current != NULL) {
 		if (CFStringHasPrefix(current, prefix)) {
 			CFMutableStringRef	tmp;
 
@@ -170,7 +264,7 @@ main(int argc, char **argv)
 
 		if (CFEqual(newSet, key)) {
 			newSetUDN = CFDictionaryGetValue(dict, kSCPropUserDefinedName);
-			if (newSetUDN)	CFRetain(newSetUDN);
+			if (newSetUDN != NULL) CFRetain(newSetUDN);
 			current = CFStringCreateWithFormat(NULL, NULL, CFSTR("%@%@"), prefix, newSet);
 			goto found;
 		}
@@ -229,7 +323,13 @@ main(int argc, char **argv)
 
     found :
 
-	if (!SCPreferencesSetValue(session, kSCPrefCurrentSet, current)) {
+	if (!(isAdmin() || hasLocalConsoleAccess())) {
+		SCPrint(TRUE, stderr,
+			CFSTR("Only local console users and administrators can change locations\n"));
+		exit (EX_NOPERM);
+	}
+
+	if (!SCPreferencesSetValue(prefs, kSCPrefCurrentSet, current)) {
 		SCPrint(TRUE, stderr,
 			CFSTR("SCPreferencesSetValue(...,%@,%@) failed\n"),
 			kSCPrefCurrentSet,
@@ -237,19 +337,19 @@ main(int argc, char **argv)
 		exit (1);
 	}
 
-	if (!SCPreferencesCommitChanges(session)) {
+	if (!SCPreferencesCommitChanges(prefs)) {
 		SCPrint(TRUE, stderr, CFSTR("SCPreferencesCommitChanges() failed\n"));
 		exit (1);
 	}
 
 	if (apply) {
-		if (!SCPreferencesApplyChanges(session)) {
+		if (!SCPreferencesApplyChanges(prefs)) {
 			SCPrint(TRUE, stderr, CFSTR("SCPreferencesApplyChanges() failed\n"));
 			exit (1);
 		}
 	}
 
-	CFRelease(session);
+	CFRelease(prefs);
 
 	SCPrint(TRUE, stdout,
 		CFSTR("%@ updated to %@ (%@)\n"),

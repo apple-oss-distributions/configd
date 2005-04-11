@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -44,8 +42,6 @@ __SCDynamicStoreCopyNotifiedKeys(SCDynamicStoreRef store, CFArrayRef *notifierKe
 	CFStringRef			sessionKey;
 	CFDictionaryRef			info;
 	CFMutableDictionaryRef		newInfo;
-
-	SCLog(_configd_verbose, LOG_DEBUG, CFSTR("__SCDynamicStoreCopyNotifiedKeys:"));
 
 	if (!store || (storePrivate->server == MACH_PORT_NULL)) {
 		return kSCStatusNoStoreSession;	/* you must have an open session to play */
@@ -88,11 +84,6 @@ _notifychanges(mach_port_t			server,
 	serverSessionRef	mySession = getSession(server);
 	CFArrayRef		notifierKeys;	/* array of CFStringRef's */
 	Boolean			ok;
-
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("List notification keys which have changed."));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  server = %d"), server);
-	}
 
 	*listRef = NULL;
 	*listLen = 0;

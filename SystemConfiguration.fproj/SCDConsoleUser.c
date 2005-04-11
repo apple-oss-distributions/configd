@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -58,11 +56,19 @@
 #endif
 
 
-const CFStringRef kSCConsoleSessionID		= CFSTR("kCGSSessionIDKey");		/* value is CFNumber */
-const CFStringRef kSCConsoleSessionUserName	= CFSTR("kCGSSessionUserNameKey");	/* value is CFString */
-const CFStringRef kSCConsoleSessionUID		= CFSTR("kCGSSessionUserIDKey");	/* value is CFNumber */
-const CFStringRef kSCConsoleSessionConsoleSet	= CFSTR("kCGSSessionConsoleSetKey");	/* value is CFNumber */
-const CFStringRef kSCConsoleSessionOnConsole	= CFSTR("kCGSSessionOnConsoleKey");	/* value is CFBoolean */
+// from CoreGraphics (CGSession.h)
+const CFStringRef kSCConsoleSessionUserName		= CFSTR("kCGSSessionUserNameKey");		/* value is CFString */
+const CFStringRef kSCConsoleSessionUID			= CFSTR("kCGSSessionUserIDKey");		/* value is CFNumber (a uid_t) */
+const CFStringRef kSCConsoleSessionConsoleSet		= CFSTR("kCGSSessionConsoleSetKey");		/* value is CFNumber */
+const CFStringRef kSCConsoleSessionOnConsole		= CFSTR("kCGSSessionOnConsoleKey");		/* value is CFBoolean */
+const CFStringRef kSCConsoleSessionLoginDone		= CFSTR("kCGSessionLoginDoneKey");		/* value is CFBoolean */
+
+// from CoreGraphics (CGSSession.h)
+const CFStringRef kSCConsoleSessionID			= CFSTR("kCGSSessionIDKey");			/* value is CFNumber */
+
+// from loginwindow
+const CFStringRef kSCConsoleSessionSystemSafeBoot	= CFSTR("kCGSSessionSystemSafeBoot");		/* value is CFBoolean */
+const CFStringRef kSCConsoleSessionLoginwindowSafeLogin	= CFSTR("kCGSSessionLoginwindowSafeLogin");	/* value is CFBoolean */
 
 
 CFStringRef
@@ -86,13 +92,12 @@ SCDynamicStoreCopyConsoleUser(SCDynamicStoreRef	store,
 	CFStringRef		key;
 	Boolean			tempSession	= FALSE;
 
-	if (!store) {
+	if (store == NULL) {
 		store = SCDynamicStoreCreate(NULL,
 					     CFSTR("SCDynamicStoreCopyConsoleUser"),
 					     NULL,
 					     NULL);
-		if (!store) {
-			SCLog(_sc_verbose, LOG_INFO, CFSTR("SCDynamicStoreCreate() failed"));
+		if (store == NULL) {
 			return NULL;
 		}
 		tempSession = TRUE;
@@ -155,13 +160,12 @@ SCDynamicStoreCopyConsoleInformation(SCDynamicStoreRef store)
 	CFStringRef		key;
 	Boolean			tempSession	= FALSE;
 
-	if (!store) {
+	if (store == NULL) {
 		store = SCDynamicStoreCreate(NULL,
 					     CFSTR("SCDynamicStoreCopyConsoleUser"),
 					     NULL,
 					     NULL);
-		if (!store) {
-			SCLog(_sc_verbose, LOG_INFO, CFSTR("SCDynamicStoreCreate() failed"));
+		if (store == NULL) {
 			return NULL;
 		}
 		tempSession = TRUE;
@@ -202,24 +206,22 @@ SCDynamicStoreSetConsoleInformation(SCDynamicStoreRef	store,
 	CFStringRef		consoleUser;
 	CFMutableDictionaryRef	dict		= NULL;
 	CFStringRef		key		= SCDynamicStoreKeyCreateConsoleUser(NULL);
-	CFNumberRef		num;
 	Boolean			ok		= TRUE;
 	Boolean			tempSession	= FALSE;
 
-	if (!store) {
+	if (store == NULL) {
 		store = SCDynamicStoreCreate(NULL,
 					     CFSTR("SCDynamicStoreSetConsoleUser"),
 					     NULL,
 					     NULL);
-		if (!store) {
-			SCLog(_sc_verbose, LOG_INFO, CFSTR("SCDynamicStoreCreate() failed"));
+		if (store == NULL) {
 			return FALSE;
 		}
 		tempSession = TRUE;
 	}
 
-	if (user == NULL) {
-		ok = SCDynamicStoreRemoveValue(store, key);
+	if ((user == NULL) && (sessions == NULL)) {
+		(void) SCDynamicStoreRemoveValue(store, key);
 		goto done;
 	}
 
@@ -228,19 +230,25 @@ SCDynamicStoreSetConsoleInformation(SCDynamicStoreRef	store,
 					 &kCFTypeDictionaryKeyCallBacks,
 					 &kCFTypeDictionaryValueCallBacks);
 
-	consoleUser = CFStringCreateWithCString(NULL, user, kCFStringEncodingMacRoman);
-	CFDictionarySetValue(dict, kSCPropUsersConsoleUserName, consoleUser);
-	CFRelease(consoleUser);
+	if (user != NULL) {
+		CFNumberRef	num;
 
-	num = CFNumberCreate(NULL, kCFNumberSInt32Type, (SInt32 *)&uid);
-	CFDictionarySetValue(dict, kSCPropUsersConsoleUserUID, num);
-	CFRelease(num);
+		consoleUser = CFStringCreateWithCString(NULL, user, kCFStringEncodingMacRoman);
+		CFDictionarySetValue(dict, kSCPropUsersConsoleUserName, consoleUser);
+		CFRelease(consoleUser);
 
-	num = CFNumberCreate(NULL, kCFNumberSInt32Type, (SInt32 *)&gid);
-	CFDictionarySetValue(dict, kSCPropUsersConsoleUserGID, num);
-	CFRelease(num);
+		num = CFNumberCreate(NULL, kCFNumberSInt32Type, (SInt32 *)&uid);
+		CFDictionarySetValue(dict, kSCPropUsersConsoleUserUID, num);
+		CFRelease(num);
 
-	CFDictionarySetValue(dict, kSCPropUsersConsoleSessionInfo, sessions);
+		num = CFNumberCreate(NULL, kCFNumberSInt32Type, (SInt32 *)&gid);
+		CFDictionarySetValue(dict, kSCPropUsersConsoleUserGID, num);
+		CFRelease(num);
+	}
+
+	if (sessions != NULL) {
+		CFDictionarySetValue(dict, kSCPropUsersConsoleSessionInfo, sessions);
+	}
 
 	ok = SCDynamicStoreSetValue(store, key, dict);
 
@@ -266,20 +274,19 @@ SCDynamicStoreSetConsoleUser(SCDynamicStoreRef	store,
 	Boolean			ok		= TRUE;
 	Boolean			tempSession	= FALSE;
 
-	if (!store) {
+	if (store == NULL) {
 		store = SCDynamicStoreCreate(NULL,
 					     CFSTR("SCDynamicStoreSetConsoleUser"),
 					     NULL,
 					     NULL);
-		if (!store) {
-			SCLog(_sc_verbose, LOG_INFO, CFSTR("SCDynamicStoreCreate() failed"));
+		if (store == NULL) {
 			return FALSE;
 		}
 		tempSession = TRUE;
 	}
 
 	if (user == NULL) {
-		ok = SCDynamicStoreRemoveValue(store, key);
+		(void) SCDynamicStoreRemoveValue(store, key);
 		goto done;
 	}
 

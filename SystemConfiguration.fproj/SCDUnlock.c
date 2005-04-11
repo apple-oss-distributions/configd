@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -48,9 +46,7 @@ SCDynamicStoreUnlock(SCDynamicStoreRef store)
 	kern_return_t			status;
 	int				sc_status;
 
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreUnlock:"));
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
 		return FALSE;
@@ -65,8 +61,10 @@ SCDynamicStoreUnlock(SCDynamicStoreRef store)
 	/* (attempt to) release the servers lock */
 	status = configunlock(storePrivate->server, (int *)&sc_status);
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("configunlock(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreUnlock configunlock(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);

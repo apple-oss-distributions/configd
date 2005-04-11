@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -26,9 +24,16 @@
 #ifndef _SCPREFERENCESPRIVATE_H
 #define _SCPREFERENCESPRIVATE_H
 
+
+#include <sys/cdefs.h>
+#include <AvailabilityMacros.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <SystemConfiguration/SCPreferences.h>
 
+
+/*!
+	@header SCPreferencesPrivate
+ */
 
 /*!
 	@enum SCPreferencesKeyType
@@ -47,6 +52,7 @@ enum {
 	kSCPreferencesKeyApply	= 3
 };
 typedef	int32_t	SCPreferencesKeyType;
+
 
 __BEGIN_DECLS
 
@@ -67,7 +73,7 @@ SCDynamicStoreKeyCreatePreferences	(
 					CFAllocatorRef		allocator,
 					CFStringRef		prefsID,
 					SCPreferencesKeyType	keyType
-					);
+					)	AVAILABLE_MAC_OS_X_VERSION_10_1_AND_LATER_BUT_DEPRECATED_IN_MAC_OS_X_VERSION_10_4;
 
 SCPreferencesRef
 SCUserPreferencesCreate			(

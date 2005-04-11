@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -41,6 +39,7 @@
 //#include <limits.h>
 
 
+__private_extern__
 void
 do_dictInit(int argc, char **argv)
 {
@@ -58,6 +57,7 @@ do_dictInit(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_dictShow(int argc, char **argv)
 {
@@ -72,6 +72,7 @@ do_dictShow(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_dictSetKey(int argc, char **argv)
 {
@@ -96,7 +97,7 @@ do_dictSetKey(int argc, char **argv)
 	CFRelease(value);
 	value = val;
 
-	key = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 	argv++; argc--;
 
 	while (argc > 0) {
@@ -163,7 +164,7 @@ do_dictSetKey(int argc, char **argv)
 				return;
 			}
 		} else {
-			val = (CFPropertyListRef)CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+			val = (CFPropertyListRef)CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 		}
 
 		if (doArray) {
@@ -185,6 +186,7 @@ do_dictSetKey(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_dictRemoveKey(int argc, char **argv)
 {
@@ -205,7 +207,7 @@ do_dictRemoveKey(int argc, char **argv)
 	CFRelease(value);
 	value = val;
 
-	key = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 	CFDictionaryRemoveValue((CFMutableDictionaryRef)value, key);
 	CFRelease(key);
 

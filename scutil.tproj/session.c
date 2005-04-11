@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -35,8 +33,9 @@
 
 #include "scutil.h"
 #include "session.h"
-#include "notify.h"
+#include "notifications.h"
 
+__private_extern__
 void
 do_open(int argc, char **argv)
 {
@@ -46,8 +45,24 @@ do_open(int argc, char **argv)
 		CFRelease(watchedPatterns);
 	}
 
-	store = SCDynamicStoreCreate(NULL, CFSTR("scutil"), storeCallback, NULL);
-	if (!store) {
+	if (argc < 1) {
+		store = SCDynamicStoreCreate(NULL, CFSTR("scutil"), storeCallback, NULL);
+	} else {
+		CFMutableDictionaryRef	options;
+
+		options = CFDictionaryCreateMutable(NULL,
+						    0,
+						    &kCFTypeDictionaryKeyCallBacks,
+						    &kCFTypeDictionaryValueCallBacks);
+		CFDictionarySetValue(options, kSCDynamicStoreUseSessionKeys, kCFBooleanTrue);
+		store = SCDynamicStoreCreateWithOptions(NULL,
+							CFSTR("scutil"),
+							options,
+							storeCallback,
+							NULL);
+		CFRelease(options);
+	}
+	if (store == NULL) {
 		SCPrint(TRUE, stdout, CFSTR("  %s\n"), SCErrorString(SCError()));
 		return;
 	}
@@ -59,11 +74,12 @@ do_open(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_close(int argc, char **argv)
 {
 	if (notifyRls) {
-		CFRunLoopRemoveSource(CFRunLoopGetCurrent(), notifyRls, kCFRunLoopDefaultMode);
+		CFRunLoopSourceInvalidate(notifyRls);
 		CFRelease(notifyRls);
 		notifyRls = NULL;
 	}
@@ -85,6 +101,7 @@ do_close(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_lock(int argc, char **argv)
 {
@@ -95,6 +112,7 @@ do_lock(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_unlock(int argc, char **argv)
 {

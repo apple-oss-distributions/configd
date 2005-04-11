@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -83,7 +81,7 @@ SCNetworkCheckReachabilityByName(const char			*nodename,
 				 SCNetworkConnectionFlags	*flags)
 {
 	SCNetworkReachabilityRef	networkAddress;
-	Boolean		ok;
+	Boolean				ok;
 
 	if (!nodename) {
 		_SCErrorSet(kSCStatusInvalidArgument);
@@ -100,25 +98,22 @@ Boolean
 SCNetworkInterfaceRefreshConfiguration(CFStringRef ifName)
 {
 	CFStringRef		key;
-	Boolean			ret = FALSE;
-	SCDynamicStoreRef	store = NULL;
+	Boolean			ret     = FALSE;
+	SCDynamicStoreRef	store;
 
 	store = SCDynamicStoreCreate(NULL,
 				     CFSTR("SCNetworkInterfaceRefreshConfiguration"),
 				     NULL, NULL);
 	if (store == NULL) {
-		goto done;
+		return FALSE;
 	}
+
 	key = SCDynamicStoreKeyCreateNetworkInterfaceEntity(NULL,
 							    kSCDynamicStoreDomainState,
 							    ifName,
 							    kSCEntNetRefreshConfiguration);
 	ret = SCDynamicStoreNotifyValue(store, key);
 	CFRelease(key);
-
- done:
-	if (store != NULL) {
-		CFRelease(store);
-	}
+	CFRelease(store);
 	return (ret);
 }

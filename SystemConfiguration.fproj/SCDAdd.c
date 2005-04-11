@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -42,6 +40,76 @@
 #include "config.h"		/* MiG generated file */
 
 Boolean
+SCDynamicStoreAddTemporaryValue(SCDynamicStoreRef store, CFStringRef key, CFPropertyListRef value)
+{
+	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
+	kern_return_t			status;
+	CFDataRef			utfKey;		/* serialized key */
+	xmlData_t			myKeyRef;
+	CFIndex				myKeyLen;
+	CFDataRef			xmlData;	/* serialized data */
+	xmlData_t			myDataRef;
+	CFIndex				myDataLen;
+	int				newInstance;
+	int				sc_status;
+
+	if (store == NULL) {
+		/* sorry, you must provide a session */
+		_SCErrorSet(kSCStatusNoStoreSession);
+	}
+
+	if (storePrivate->server == MACH_PORT_NULL) {
+		/* sorry, you must have an open session to play */
+		_SCErrorSet(kSCStatusNoStoreServer);
+		return FALSE;
+	}
+
+	/* serialize the key */
+	if (!_SCSerializeString(key, &utfKey, (void **)&myKeyRef, &myKeyLen)) {
+		_SCErrorSet(kSCStatusFailed);
+		return FALSE;
+	}
+
+	/* serialize the data */
+	if (!_SCSerialize(value, &xmlData, (void **)&myDataRef, &myDataLen)) {
+		CFRelease(utfKey);
+		_SCErrorSet(kSCStatusFailed);
+		return FALSE;
+	}
+
+	/* send the key & data to the server */
+	status = configadd_s(storePrivate->server,
+			     myKeyRef,
+			     myKeyLen,
+			     myDataRef,
+			     myDataLen,
+			     &newInstance,
+			     (int *)&sc_status);
+
+	/* clean up */
+	CFRelease(utfKey);
+	CFRelease(xmlData);
+
+	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
+		if (status != MACH_SEND_INVALID_DEST)
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreAddTemporaryValue configadd_s(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
+		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
+		storePrivate->server = MACH_PORT_NULL;
+		_SCErrorSet(status);
+		return FALSE;
+	}
+
+	if (sc_status != kSCStatusOK) {
+		_SCErrorSet(sc_status);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+Boolean
 SCDynamicStoreAddValue(SCDynamicStoreRef store, CFStringRef key, CFPropertyListRef value)
 {
 	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
@@ -55,13 +123,7 @@ SCDynamicStoreAddValue(SCDynamicStoreRef store, CFStringRef key, CFPropertyListR
 	int				newInstance;
 	int				sc_status;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCDynamicStoreAddValue:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key          = %@"), key);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  value        = %@"), value);
-	}
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
 		return FALSE;
@@ -100,8 +162,10 @@ SCDynamicStoreAddValue(SCDynamicStoreRef store, CFStringRef key, CFPropertyListR
 	CFRelease(xmlData);
 
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("configadd(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreAddValue configadd(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);

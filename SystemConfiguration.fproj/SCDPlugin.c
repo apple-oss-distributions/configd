@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -137,6 +135,9 @@ reaper(int sigraised)
 			  MACH_PORT_NULL,		/* rcv_name */
 			  0,				/* timeout */
 			  MACH_PORT_NULL);		/* notify */
+	if (status == MACH_SEND_TIMED_OUT) {
+		mach_msg_destroy(&msg.header);
+	}
 
 	return;
 }
@@ -300,18 +301,8 @@ _SCDPluginExecCommand2(SCDPluginExecCallBack	callout,
 
 		case 0 : {	/* if child */
 
-			uid_t	curUID	= geteuid();
-			gid_t	curGID	= getegid();
 			int	i;
 			int	status;
-
-			if (curUID != uid) {
-				(void) setuid(uid);
-			}
-
-			if (curGID != gid) {
-				(void) setgid(gid);
-			}
 
 			if (setup) {
 				(setup)(pid, setupContext);
@@ -321,6 +312,14 @@ _SCDPluginExecCommand2(SCDPluginExecCallBack	callout,
 				open(_PATH_DEVNULL, O_RDWR, 0);
 				dup(0);
 				dup(0);
+			}
+
+			if (gid != getegid()) {
+				(void) setgid(gid);
+			}
+
+			if (uid != geteuid()) {
+				(void) setuid(uid);
 			}
 
 			/* ensure that our PATH environment variable is somewhat reasonable */

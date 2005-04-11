@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -32,10 +30,13 @@
 
 
 #include <unistd.h>
+#define KERNEL_PRIVATE
 #include <sys/ioctl.h>
+#undef  KERNEL_PRIVATE
 #include <sys/socket.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_vlan_var.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
 
@@ -434,6 +435,97 @@ NetworkInterfaceCopyMediaSubTypeOptions(CFArrayRef	available,
 }
 
 
+static Boolean
+__getMTULimits(char	ifr_name[IFNAMSIZ],
+	       int	*mtu_min,
+	       int	*mtu_max)
+{
+	int			ifType		= 0;
+	io_iterator_t		io_iter		= 0;
+	io_registry_entry_t	io_interface	= 0;
+	io_registry_entry_t	io_controller	= 0;
+	kern_return_t		kr;
+	static mach_port_t      masterPort	= MACH_PORT_NULL;
+	CFMutableDictionaryRef	matchingDict;
+
+	/* look for a matching interface in the IORegistry */
+
+	if (masterPort == MACH_PORT_NULL) {
+		kr = IOMasterPort(MACH_PORT_NULL, &masterPort);
+		if (kr != KERN_SUCCESS) {
+			return FALSE;
+		}
+	}
+
+	matchingDict = IOBSDNameMatching(masterPort, 0, ifr_name);
+	if (matchingDict) {
+		/* Note: IOServiceGetMatchingServices consumes a reference on the 'matchingDict' */
+		kr = IOServiceGetMatchingServices(masterPort, matchingDict, &io_iter);
+		if ((kr == KERN_SUCCESS) && io_iter) {
+		    /* should only have a single match */
+		    io_interface = IOIteratorNext(io_iter);
+		}
+		if (io_iter)	IOObjectRelease(io_iter);
+	}
+
+	if (io_interface) {
+		CFNumberRef	num;
+
+		/*
+		 * found an interface, get the interface type
+		 */
+		num = IORegistryEntryCreateCFProperty(io_interface, CFSTR(kIOInterfaceType), NULL, kNilOptions);
+		if (num) {
+			if (isA_CFNumber(num)) {
+				CFNumberGetValue(num, kCFNumberIntType, &ifType);
+			}
+			CFRelease(num);
+		}
+
+		/*
+		 * ...and the property we are REALLY interested is in the controller,
+		 * which is the parent of the interface object.
+		 */
+		(void)IORegistryEntryGetParentEntry(io_interface, kIOServicePlane, &io_controller);
+		IOObjectRelease(io_interface);
+	} else {
+		/* if no matching interface */
+		return FALSE;
+	}
+
+	if (io_controller) {
+		CFNumberRef	num;
+
+		num = IORegistryEntryCreateCFProperty(io_controller, CFSTR(kIOMaxPacketSize), NULL, kNilOptions);
+		if (num) {
+			if (isA_CFNumber(num)) {
+				int	value;
+
+				/*
+				 * Get the value and subtract the FCS bytes and Ethernet header
+				 * sizes from the maximum frame size reported by the controller
+				 * to get the MTU size. The 14 byte media header can be found
+				 * in the registry, but not the size for the trailing FCS bytes.
+				 */
+				CFNumberGetValue(num, kCFNumberIntType, &value);
+
+				if (ifType == IFT_ETHER) {
+					value -= (ETHER_HDR_LEN + ETHER_CRC_LEN);
+				}
+
+				if (mtu_min)	*mtu_min = IF_MINMTU;
+				if (mtu_max)	*mtu_max = value;
+			}
+			CFRelease(num);
+		}
+
+		IOObjectRelease(io_controller);
+	}
+
+	return TRUE;
+}
+
+
 Boolean
 NetworkInterfaceCopyMTU(CFStringRef	interface,
 			int		*mtu_cur,
@@ -446,7 +538,7 @@ NetworkInterfaceCopyMTU(CFStringRef	interface,
 
 	bzero((void *)&ifr, sizeof(ifr));
 	if (_SC_cfstring_to_cstring(interface, ifr.ifr_name, sizeof(ifr.ifr_name), kCFStringEncodingASCII) == NULL) {
-		SCLog(TRUE, LOG_ERR, CFSTR("could not convert inteface name"));
+		SCLog(TRUE, LOG_ERR, CFSTR("could not convert interface name"));
 		goto done;
 	}
 
@@ -462,88 +554,26 @@ NetworkInterfaceCopyMTU(CFStringRef	interface,
 	}
 
 	if (mtu_cur)	*mtu_cur = ifr.ifr_mtu;
+	if (mtu_min)	*mtu_min = ifr.ifr_mtu;
+	if (mtu_max)	*mtu_max = ifr.ifr_mtu;
 
 	/* get valid MTU range */
 
-	if (mtu_min || mtu_max) {
-		int			ifType		= 0;
-		io_iterator_t		io_iter		= 0;
-		io_registry_entry_t	io_interface	= 0;
-		io_registry_entry_t	io_controller	= 0;
-		kern_return_t		kr;
-		mach_port_t		masterPort	= MACH_PORT_NULL;
-		CFMutableDictionaryRef	matchingDict;
+	if (mtu_min != NULL || mtu_max != NULL) {
+		if (ioctl(sock, SIOCGIFDEVMTU, (caddr_t)&ifr) == 0) {
+			struct ifdevmtu *	devmtu_p;
 
-		/* assume that we don't know */
-
-		if (mtu_min) *mtu_min = -1;
-		if (mtu_max) *mtu_max = -1;
-
-		/* look for a matching interface in the IORegistry */
-
-		matchingDict = IOBSDNameMatching(masterPort, 0, ifr.ifr_name);
-		if (matchingDict) {
-			/* Note: IOServiceGetMatchingServices consumes a reference on the 'matchingDict' */
-			kr = IOServiceGetMatchingServices(masterPort, matchingDict, &io_iter);
-			if ((kr == KERN_SUCCESS) && io_iter) {
-			    /* should only have a single match */
-			    io_interface = IOIteratorNext(io_iter);
+			devmtu_p = &ifr.ifr_devmtu;
+			if (mtu_min != NULL) {
+				*mtu_min = (devmtu_p->ifdm_min > IF_MINMTU)
+					? devmtu_p->ifdm_min : IF_MINMTU;
 			}
-			if (io_iter)	IOObjectRelease(io_iter);
-		}
-
-		/* found an interface with the given BSD name, get its parent */
-
-		if (io_interface) {
-			CFNumberRef	num;
-
-			/*
-			 * get the interface type
-			 */
-			num = IORegistryEntryCreateCFProperty(io_interface, CFSTR(kIOInterfaceType), NULL, kNilOptions);
-			if (num) {
-				if (isA_CFNumber(num)) {
-					CFNumberGetValue(num, kCFNumberIntType, &ifType);
-				}
-				CFRelease(num);
-		       }
-
-			/*
-			 * ...and the property we are REALLY interested is in the controller,
-			 * which is the parent of the interface object.
-			 */
-			(void)IORegistryEntryGetParentEntry(io_interface, kIOServicePlane, &io_controller);
-
-			IOObjectRelease(io_interface);
-		}
-
-		if (io_controller) {
-			CFNumberRef	num;
-
-			num = IORegistryEntryCreateCFProperty(io_controller, CFSTR(kIOMaxPacketSize), NULL, kNilOptions);
-			if (num) {
-				if (isA_CFNumber(num)) {
-					int	value;
-
-					/*
-					 * Get the value and subtract the FCS bytes and Ethernet header
-					 * sizes from the maximum frame size reported by the controller
-					 * to get the MTU size. The 14 byte media header can be found
-					 * in the registry, but not the size for the trailing FCS bytes.
-					 */
-					CFNumberGetValue(num, kCFNumberIntType, &value);
-
-					if (ifType == IFT_ETHER) {
-						value -= (ETHER_HDR_LEN + ETHER_CRC_LEN);
-					}
-
-					if (mtu_min)	*mtu_min = IF_MINMTU;
-					if (mtu_max)	*mtu_max = value;
-				}
-				CFRelease(num);
+			if (mtu_max != NULL) {
+				*mtu_max = devmtu_p->ifdm_max;
 			}
-
-			IOObjectRelease(io_controller);
+		}
+		else {
+			(void)__getMTULimits(ifr.ifr_name, mtu_min, mtu_max);
 		}
 	}
 

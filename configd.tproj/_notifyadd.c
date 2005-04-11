@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -61,12 +59,6 @@ __SCDynamicStoreAddWatchedKey(SCDynamicStoreRef store, CFStringRef key, Boolean 
 	int				sc_status	= kSCStatusOK;
 	CFNumberRef			sessionNum	= NULL;
 	SCDynamicStorePrivateRef	storePrivate	= (SCDynamicStorePrivateRef)store;
-
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("__SCDynamicStoreAddWatchedKey:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key     = %@"), key);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  isRegex = %s"), isRegex ? "TRUE" : "FALSE");
-	}
 
 	if (!store || (storePrivate->server == MACH_PORT_NULL)) {
 		return kSCStatusNoStoreSession;	/* you must have an open session to play */
@@ -133,35 +125,30 @@ _notifyadd(mach_port_t 			server,
 	   int				*sc_status
 )
 {
-	serverSessionRef	mySession = getSession(server);
-	CFStringRef		key;		/* key  (un-serialized) */
-
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("Add notification key for this session."));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  server = %d"), server);
-	}
+	CFStringRef		key		= NULL;	/* key  (un-serialized) */
+	serverSessionRef	mySession	= getSession(server);
 
 	/* un-serialize the key */
 	if (!_SCUnserializeString(&key, NULL, (void *)keyRef, keyLen)) {
 		*sc_status = kSCStatusFailed;
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	if (!isA_CFString(key)) {
 		*sc_status = kSCStatusInvalidArgument;
-		CFRelease(key);
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	if (!mySession) {
 		*sc_status = kSCStatusNoStoreSession;	/* you must have an open session to play */
-		CFRelease(key);
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	*sc_status = __SCDynamicStoreAddWatchedKey(mySession->store, key, isRegex != 0, FALSE);
-	CFRelease(key);
 
+    done :
+
+	if (key)	CFRelease(key);
 	return KERN_SUCCESS;
 }
 
@@ -233,12 +220,6 @@ __SCDynamicStoreSetNotificationKeys(SCDynamicStoreRef store, CFArrayRef keys, CF
 	updateKeysContext		myContext;
 	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
 
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("__SCDynamicStoreSetNotificationKeys:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  keys     = %@"), keys);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  patterns = %@"), patterns);
-	}
-
 	if (!store || (storePrivate->server == MACH_PORT_NULL)) {
 		return kSCStatusNoStoreSession;	/* you must have an open session to play */
 	}
@@ -294,14 +275,9 @@ _notifyset(mach_port_t 			server,
 	   int				*sc_status
 )
 {
-	serverSessionRef	mySession	= getSession(server);
 	CFArrayRef		keys		= NULL;	/* key (un-serialized) */
+	serverSessionRef	mySession	= getSession(server);
 	CFArrayRef		patterns	= NULL;	/* patterns (un-serialized) */
-
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("Add notification key for this session."));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  server = %d"), server);
-	}
 
 	*sc_status = kSCStatusOK;
 

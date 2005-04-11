@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -38,9 +36,7 @@
 
 #include <sys/cdefs.h>
 #include <mach/mach.h>
-
-#include <CoreFoundation/CFRunLoop.h>
-#include <CoreFoundation/CFMachPort.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 __BEGIN_DECLS
 
@@ -54,7 +50,7 @@ boolean_t	server_active	(mach_port_t		*service_port);
 void		server_init	(mach_port_t		service_port,
 				 Boolean		enableRestart);
 
-void		server_shutdown	();
+int		server_shutdown	();
 
 void		server_loop	();
 
@@ -64,6 +60,8 @@ kern_return_t	_snapshot	(mach_port_t		server,
 kern_return_t	_configopen	(mach_port_t		server,
 				 xmlData_t		nameRef,
 				 mach_msg_type_number_t	nameLen,
+				 xmlData_t		optionsRef,
+				 mach_msg_type_number_t	optionsLen,
 				 mach_port_t		*newServer,
 				 int			*sc_status);
 

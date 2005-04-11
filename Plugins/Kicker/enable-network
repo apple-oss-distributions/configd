@@ -1,0 +1,15 @@
+#!/bin/sh
+#
+# network configuration has changed
+#
+logger -i -p daemon.debug -t enable-network "process network configuration change"
+
+. /etc/rc.common
+CheckForNetwork
+if [ "${NETWORKUP}" = "-NO-" ]; then exit 0; fi
+
+/System/Library/StartupItems/NetworkTime/NetworkTime start
+/System/Library/StartupItems/NIS/NIS start
+/System/Library/StartupItems/NFS/NFS start
+
+exit 1

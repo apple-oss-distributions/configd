@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -32,9 +30,9 @@
 
 
 /*!
-	@header SCDynamicStoreCopySpecificPrivate.h
-	The following APIs allow an application to retrieve console
-	information.
+	@header SCDynamicStoreCopySpecificPrivate
+	@discussion The following APIs allow an application to retrieve
+		console information.
  */
 
 
@@ -43,11 +41,14 @@ __BEGIN_DECLS
 /*
  * Predefined keys for the console session dictionaries
  */
-extern const CFStringRef kSCConsoleSessionID;		/* value is CFNumber */
-extern const CFStringRef kSCConsoleSessionUserName;	/* value is CFString */
-extern const CFStringRef kSCConsoleSessionUID;		/* value is CFNumber */
-extern const CFStringRef kSCConsoleSessionConsoleSet;	/* value is CFNumber */
-extern const CFStringRef kSCConsoleSessionOnConsole;	/* value is CFBoolean */
+extern const CFStringRef kSCConsoleSessionID;			/* value is CFNumber */
+extern const CFStringRef kSCConsoleSessionUserName;		/* value is CFString */
+extern const CFStringRef kSCConsoleSessionUID;			/* value is CFNumber (a uid_t) */
+extern const CFStringRef kSCConsoleSessionConsoleSet;		/* value is CFNumber */
+extern const CFStringRef kSCConsoleSessionOnConsole;		/* value is CFBoolean */
+extern const CFStringRef kSCConsoleSessionLoginDone;		/* value is CFBoolean */
+extern const CFStringRef kSCConsoleSessionSystemSafeBoot;	/* value is CFBoolean */
+extern const CFStringRef kSCConsoleSessionLoginwindowSafeLogin;	/* value is CFBoolean */
 
 /*!
 	@function SCDynamicStoreCopyConsoleInformation

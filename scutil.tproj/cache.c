@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -47,6 +45,7 @@ sort_keys(const void *p1, const void *p2, void *context) {
 }
 
 
+__private_extern__
 void
 do_list(int argc, char **argv)
 {
@@ -58,7 +57,7 @@ do_list(int argc, char **argv)
 
 	pattern = CFStringCreateWithCString(NULL,
 					    (argc >= 1) ? argv[0] : ".*",
-					    kCFStringEncodingMacRoman);
+					    kCFStringEncodingUTF8);
 
 	list = SCDynamicStoreCopyKeyList(store, pattern);
 	CFRelease(pattern);
@@ -96,12 +95,13 @@ do_list(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_add(int argc, char **argv)
 {
 	CFStringRef	key;
 
-	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 
 	if (argc < 2) {
 		if (!SCDynamicStoreAddValue(store, key, value)) {
@@ -118,13 +118,14 @@ do_add(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_get(int argc, char **argv)
 {
 	CFStringRef		key;
 	CFPropertyListRef	newValue;
 
-	key      = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key      = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 	newValue = SCDynamicStoreCopyValue(store, key);
 	CFRelease(key);
 	if (!newValue) {
@@ -141,12 +142,13 @@ do_get(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_set(int argc, char **argv)
 {
 	CFStringRef	key;
 
-	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 	if (!SCDynamicStoreSetValue(store, key, value)) {
 		SCPrint(TRUE, stdout, CFSTR("  %s\n"), SCErrorString(SCError()));
 	}
@@ -155,13 +157,14 @@ do_set(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_show(int argc, char **argv)
 {
 	CFStringRef		key;
 	CFPropertyListRef	newValue;
 
-	key = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 
 	if (argc == 1) {
 		newValue = SCDynamicStoreCopyValue(store, key);
@@ -185,12 +188,13 @@ do_show(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_remove(int argc, char **argv)
 {
 	CFStringRef	key;
 
-	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 	if (!SCDynamicStoreRemoveValue(store, key)) {
 		SCPrint(TRUE, stdout, CFSTR("  %s\n"), SCErrorString(SCError()));
 	}
@@ -199,12 +203,13 @@ do_remove(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_notify(int argc, char **argv)
 {
 	CFStringRef	key;
 
-	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 	if (!SCDynamicStoreNotifyValue(store, key)) {
 		SCPrint(TRUE, stdout, CFSTR("  %s\n"), SCErrorString(SCError()));
 	}
@@ -213,12 +218,13 @@ do_notify(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_touch(int argc, char **argv)
 {
 	CFStringRef	key;
 
-	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingMacRoman);
+	key    = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
 	if (!SCDynamicStoreTouchValue(store, key)) {
 		SCPrint(TRUE, stdout, CFSTR("  %s\n"), SCErrorString(SCError()));
 	}

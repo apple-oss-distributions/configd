@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -48,9 +46,7 @@ SCDynamicStoreNotifyCancel(SCDynamicStoreRef store)
 	kern_return_t			status;
 	int				sc_status;
 
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreNotifyCancel:"));
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
 		return FALSE;
@@ -70,17 +66,12 @@ SCDynamicStoreNotifyCancel(SCDynamicStoreRef store)
 			CFRunLoopSourceInvalidate(storePrivate->rls);
 			return TRUE;
 		case Using_NotifierInformViaCallback :
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("  cancel callback runloop source"));
+			/* invalidate and release the run loop source */
+			CFRunLoopSourceInvalidate(storePrivate->callbackRLS);
+			CFRelease(storePrivate->callbackRLS);
+			storePrivate->callbackRLS = NULL;
 
-			/* remove the run loop source */
-			CFRunLoopRemoveSource(storePrivate->callbackRunLoop,
-					      storePrivate->callbackRunLoopSource,
-					      kCFRunLoopDefaultMode);
-			CFRelease(storePrivate->callbackRunLoopSource);
-			storePrivate->callbackRunLoop		= NULL;
-			storePrivate->callbackRunLoopSource	= NULL;
-
-			/* invalidate port */
+			/* invalidate and release the callback mach port */
 			CFMachPortInvalidate(storePrivate->callbackPort);
 			CFRelease(storePrivate->callbackPort);
 			storePrivate->callbackPort		= NULL;
@@ -98,8 +89,10 @@ SCDynamicStoreNotifyCancel(SCDynamicStoreRef store)
 	storePrivate->notifyStatus = NotifierNotRegistered;
 
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("notifycancel(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreNotifyCancel notifycancel(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);

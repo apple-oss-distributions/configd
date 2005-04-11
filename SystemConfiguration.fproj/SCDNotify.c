@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -49,12 +47,7 @@ SCDynamicStoreNotifyValue(SCDynamicStoreRef	store,
 	CFIndex				myKeyLen;
 	int				sc_status;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCDynamicStoreNotifyValue:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key = %@"), key);
-	}
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
 		return FALSE;
@@ -82,8 +75,10 @@ SCDynamicStoreNotifyValue(SCDynamicStoreRef	store,
 	CFRelease(utfKey);
 
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("confignotify(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreNotifyValue confignotify(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);

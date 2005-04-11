@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -45,12 +43,6 @@ __SCDynamicStoreNotifyCancel(SCDynamicStoreRef store)
 {
 	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
 
-	SCLog(_configd_verbose, LOG_DEBUG, CFSTR("__SCDynamicStoreNotifyCancel:"));
-
-	if (!store) {
-		return kSCStatusNoStoreSession;	/* you must have an open session to play */
-	}
-
 	/*
 	 * cleanup any mach port based notifications.
 	 */
@@ -63,7 +55,7 @@ __SCDynamicStoreNotifyCancel(SCDynamicStoreRef store)
 	 * cleanup any file based notifications.
 	 */
 	if (storePrivate->notifyFile >= 0) {
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("  closing (notification) fd %d"), storePrivate->notifyFile);
+		// close (notification) fd
 		(void) close(storePrivate->notifyFile);
 		storePrivate->notifyFile = -1;
 	}
@@ -105,20 +97,11 @@ _notifycancel(mach_port_t	server,
 {
 	serverSessionRef	mySession = getSession(server);
 
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("Cancel requested notifications."));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  server = %d"), server);
-	}
-
 	if (!mySession) {
 		*sc_status = kSCStatusNoStoreSession;	/* you must have an open session to play */
 		return KERN_SUCCESS;
 	}
 
 	*sc_status = __SCDynamicStoreNotifyCancel(mySession->store);
-	if (*sc_status != kSCStatusOK) {
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("  __SCDynamicStoreNotifyCancel(): %s"), SCErrorString(*sc_status));
-	}
-
 	return KERN_SUCCESS;
 }
