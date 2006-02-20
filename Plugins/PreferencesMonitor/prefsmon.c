@@ -46,6 +46,8 @@
 #include <SystemConfiguration/SCValidation.h>
 
 
+
+
 static SCPreferencesRef		prefs		= NULL;
 static SCDynamicStoreRef	store		= NULL;
 
@@ -197,6 +199,7 @@ updateConfiguration(SCPreferencesRef		prefs,
 	CFStringRef		pattern;
 	CFMutableArrayRef	patterns;
 	CFDictionaryRef		set		= NULL;
+
 
 	if ((notificationType & kSCPreferencesNotificationApply) != kSCPreferencesNotificationApply) {
 		return;

@@ -82,8 +82,8 @@ static CFRunLoopRef		plugin_runLoop	= NULL;
 
 
 #ifdef	ppc
-//extern SCDynamicStoreBundleLoadFunction	load_ATconfig;
-//extern SCDynamicStoreBundleStopFunction	stop_ATconfig;
+extern SCDynamicStoreBundleLoadFunction		load_ATconfig;
+extern SCDynamicStoreBundleStopFunction		stop_ATconfig;
 #endif	/* ppc */
 extern SCDynamicStoreBundleLoadFunction		load_IPMonitor;
 extern SCDynamicStoreBundlePrimeFunction	prime_IPMonitor;
@@ -108,13 +108,13 @@ typedef struct {
 
 static const builtin builtin_plugins[] = {
 #ifdef	ppc
-//	{
-//		CFSTR("com.apple.SystemConfiguration.ATconfig"),
-//		&load_ATconfig,
-//		NULL,
-//		NULL,
-//		&stop_ATconfig
-//	},
+	{
+		CFSTR("com.apple.SystemConfiguration.ATconfig"),
+		&load_ATconfig,
+		NULL,
+		NULL,
+		&stop_ATconfig
+	},
 #endif	/* ppc */
 	{
 		CFSTR("com.apple.SystemConfiguration.IPMonitor"),

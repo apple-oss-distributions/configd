@@ -246,6 +246,7 @@ __SCDynamicStoreCreatePrivate(CFAllocatorRef		allocator,
 	/* initialize runtime */
 	pthread_once(&initialized, __SCDynamicStoreInitialize);
 
+
 	/* allocate session */
 	size  = sizeof(SCDynamicStorePrivate) - sizeof(CFRuntimeBase);
 	storePrivate = (SCDynamicStorePrivateRef)_CFRuntimeCreateInstance(allocator,

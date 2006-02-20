@@ -61,6 +61,7 @@
 #include "pppcontroller.h"
 #include <ppp/pppcontroller_types.h>
 
+
 /* -------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------- */
 
@@ -414,6 +415,7 @@ SCNetworkConnectionCreateWithServiceID(CFAllocatorRef			allocator,
 		_SCErrorSet(kSCStatusInvalidArgument);
 		return NULL;
 	}
+
 
 	connectionPrivate = __SCNetworkConnectionCreatePrivate(allocator, serviceID, callout, context);
 
@@ -983,6 +985,7 @@ SCNetworkConnectionCopyUserPreferences(CFDictionaryRef	selectionOptions,
 	Boolean			success		= FALSE;
 	int			status;
 
+
 	envdebug = getenv("PPPDebug");
 	if (envdebug) {
 		if (sscanf(envdebug, "%d", &debug) != 1)
@@ -1209,6 +1212,7 @@ SCNetworkConnectionPrivateCopyDefaultServiceIDForDial(SCDynamicStoreRef session,
 {
 	Boolean			foundService		= FALSE;
 	CFPropertyListRef	lastServiceSelectedInIC = NULL;
+
 
 
 	// we found the service the user last had open in IC

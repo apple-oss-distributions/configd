@@ -35,6 +35,8 @@
 #include <netdb.h>
 
 
+
+
 CFStringRef
 SCDynamicStoreKeyCreateProxies(CFAllocatorRef allocator)
 {
@@ -119,7 +121,6 @@ SCDynamicStoreCopyProxies(SCDynamicStoreRef store)
 	CFNumberRef		num;
 	CFDictionaryRef		proxies;
 	Boolean			tempSession	= FALSE;
-
 
 
 	/* copy proxy information from dynamic store */
@@ -256,6 +257,7 @@ SCDynamicStoreCopyProxies(SCDynamicStoreRef store)
 			CFRelease(num);
 		}
 	}
+
 
 	proxies = CFDictionaryCreateCopy(NULL, newProxies);
 	CFRelease(newProxies);

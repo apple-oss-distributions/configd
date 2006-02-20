@@ -32,6 +32,7 @@
 #include <SystemConfiguration/SCValidation.h>
 #include <SystemConfiguration/SCPrivate.h>
 
+
 CFStringRef
 SCDynamicStoreKeyCreateLocation(CFAllocatorRef allocator)
 {
@@ -76,6 +77,7 @@ SCDynamicStoreCopyLocation(SCDynamicStoreRef store)
 	CFRetain(location);
 
     done :
+
 
 	if (tempSession)	CFRelease(store);
 	if (dict)		CFRelease(dict);

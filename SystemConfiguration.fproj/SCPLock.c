@@ -40,6 +40,7 @@
 #include <pthread.h>
 #include <sys/errno.h>
 
+
 Boolean
 SCPreferencesLock(SCPreferencesRef prefs, Boolean wait)
 {
@@ -70,6 +71,7 @@ SCPreferencesLock(SCPreferencesRef prefs, Boolean wait)
 			goto perUser;
 		}
 	}
+
 
 	pthread_mutex_lock(&prefsPrivate->lock);
 

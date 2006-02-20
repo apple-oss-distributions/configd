@@ -133,6 +133,7 @@ getLine(char *buf, int len, InputRef src)
 		history(src->h, &ev, H_ENTER, buf);
 	}
 
+
 	return buf;
 }
 

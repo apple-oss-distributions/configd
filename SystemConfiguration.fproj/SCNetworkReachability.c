@@ -61,6 +61,8 @@
 #include <ppp/ppp_msg.h>
 
 
+
+
 #define kSCNetworkFlagsFirstResolvePending	(1<<31)
 
 
@@ -2057,6 +2059,7 @@ SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef	target,
 		return TRUE;
 	}
 
+
 	ok = __SCNetworkReachabilityGetFlags(&store, target, flags, NULL, FALSE);
 	*flags &= ~kSCNetworkFlagsFirstResolvePending;
 	if (store != NULL)	CFRelease(store);
@@ -2269,6 +2272,7 @@ rlsPerform(void *info)
 	SCNetworkReachabilityPrivateRef	targetPrivate	= (SCNetworkReachabilityPrivateRef)target;
 
 	SCLog(_sc_debug, LOG_DEBUG, CFSTR("process reachability change"));
+
 
 	pthread_mutex_lock(&targetPrivate->lock);
 
