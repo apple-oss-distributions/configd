@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -32,34 +32,36 @@
 #include <SystemConfiguration/SCPreferencesPathKey.h>
 #include <IOKit/IOKitLib.h>
 
-#include "SCNetworkConfiguration.h"
 
 typedef struct {
 
-	/* base CFType information */
+	// base CFType information
 	CFRuntimeBase		cfBase;
 
-	/* set id */
+	// set id
 	CFStringRef		setID;
 
-	/* prefs */
+	// prefs
 	SCPreferencesRef	prefs;
+
+	// name
+	CFStringRef		name;
 
 } SCNetworkSetPrivate, *SCNetworkSetPrivateRef;
 
 
 typedef struct {
 
-	/* base CFType information */
+	// base CFType information
 	CFRuntimeBase		cfBase;
 
-	/* service id */
+	// service id
 	CFStringRef		serviceID;
 
-	/* interface */
+	// interface
 	SCNetworkInterfaceRef   interface;
 
-	/* prefs */
+	// prefs
 	SCPreferencesRef	prefs;
 
 } SCNetworkServicePrivate, *SCNetworkServicePrivateRef;
@@ -67,13 +69,13 @@ typedef struct {
 
 typedef struct {
 
-	/* base CFType information */
+	// base CFType information
 	CFRuntimeBase		cfBase;
 
-	/* entity id */
+	// entity id
 	CFStringRef		entityID;
 
-	/* service */
+	// service
 	SCNetworkServiceRef     service;
 
 } SCNetworkProtocolPrivate, *SCNetworkProtocolPrivateRef;
@@ -87,24 +89,29 @@ typedef struct {
 	// interface information
 	CFStringRef		interface_type;		// interface type
 
+	// [non-localized] name
+	CFStringRef		name;			// non-localized [display] name
+
 	// localized name
 	CFStringRef		localized_name;		// localized [display] name
 	CFStringRef		localized_key;
 	CFStringRef		localized_arg1;
 	CFStringRef		localized_arg2;
 
-	/* [layered] interface*/
+	// [layered] interface
 	SCNetworkInterfaceRef   interface;
 
-	/* service (NULL if not associated with a service)  */
-	SCNetworkServiceRef     service;
+	// prefs (for associated service, BOND interfaces, and VLAN interfaces)
+	SCPreferencesRef	prefs;
 
-	/* unsaved configuration (when prefs not [yet] available) */
-	CFDictionaryRef		unsaved;
+	// serviceID (NULL if not associated with a service)
+	CFStringRef		serviceID;
+
+	// unsaved configuration (when prefs not [yet] available)
+	CFMutableDictionaryRef	unsaved;
 
 	// [SCPreferences] interface entity information
 	CFStringRef		entity_device;		// interface device
-	CFStringRef		entity_hardware;	// interface hardware
 	CFStringRef		entity_type;		// interface type
 	CFStringRef		entity_subtype;		// interface subtype
 
@@ -113,16 +120,34 @@ typedef struct {
 	CFMutableArrayRef       supported_protocol_types;
 
 	// IORegistry (service plane) information
-	CFStringRef		address;
+	CFDataRef		address;
+	CFStringRef		addressString;
 	Boolean			builtin;
 	CFStringRef		location;
 	CFStringRef		path;
-	Boolean			supportsDeviceOnHold;
+	CFMutableDictionaryRef	overrides;
+	Boolean			modemIsV92;
 	Boolean			supportsBond;
 	Boolean			supportsVLAN;
+	CFNumberRef		type;
+	CFNumberRef		unit;
 
 	// misc
 	int			sort_order;		// sort order for this interface
+
+	// for BOND interfaces
+	struct {
+		CFArrayRef		interfaces;
+		CFDictionaryRef		options;
+		CFNumberRef		mode;
+	} bond;
+
+	// for VLAN interfaces
+	struct {
+		SCNetworkInterfaceRef	interface;
+		CFNumberRef		tag;		// e.g. 1 <= tag <= 4094
+		CFDictionaryRef		options;
+	} vlan;
 
 } SCNetworkInterfacePrivate, *SCNetworkInterfacePrivateRef;
 
@@ -130,11 +155,78 @@ typedef struct {
 __BEGIN_DECLS
 
 
-SCNetworkServicePrivateRef
-__SCNetworkServiceCreatePrivate			(CFAllocatorRef		allocator,
-						 CFStringRef		serviceID,
+#pragma mark -
+#pragma mark SCNetworkInterface configuration (internal)
+
+
+CFArrayRef
+__SCNetworkInterfaceCopyAll_IONetworkInterface	(void);
+
+SCNetworkInterfacePrivateRef
+__SCNetworkInterfaceCreateCopy			(CFAllocatorRef		allocator,
+						 SCNetworkInterfaceRef  interface,
+						 SCPreferencesRef	prefs,
+						 CFStringRef		serviceID);
+
+SCNetworkInterfacePrivateRef
+__SCNetworkInterfaceCreatePrivate		(CFAllocatorRef		allocator,
 						 SCNetworkInterfaceRef	interface,
-						 SCPreferencesRef	prefs);
+						 SCPreferencesRef	prefs,
+						 CFStringRef		serviceID,
+						 io_string_t		path);
+
+SCNetworkInterfacePrivateRef
+_SCBondInterfaceCreatePrivate			(CFAllocatorRef		allocator,
+						 CFStringRef		bond_if);
+
+SCNetworkInterfacePrivateRef
+_SCVLANInterfaceCreatePrivate			(CFAllocatorRef		allocator,
+						 CFStringRef		vlan_if);
+
+CFDictionaryRef
+__SCNetworkInterfaceCopyInterfaceEntity		(SCNetworkInterfaceRef	interface);
+
+CFArrayRef
+__SCNetworkInterfaceCopyDeepConfiguration       (SCNetworkInterfaceRef  interface);
+
+CFStringRef
+__SCNetworkInterfaceGetDefaultConfigurationType	(SCNetworkInterfaceRef	interface);
+
+CFStringRef
+__SCNetworkInterfaceGetNonLocalizedDisplayName	(SCNetworkInterfaceRef	interface);
+
+Boolean
+__SCNetworkInterfaceIsValidExtendedConfigurationType
+						(SCNetworkInterfaceRef	interface,
+						 CFStringRef		extendedType,
+						 Boolean		requirePerInterface);
+
+CFDictionaryRef
+__SCNetworkInterfaceGetTemplateOverrides	(SCNetworkInterfaceRef	interface,
+						 CFStringRef		interfaceType);
+
+int
+__SCNetworkInterfaceOrder			(SCNetworkInterfaceRef	interface);
+
+Boolean
+__SCNetworkInterfaceSetConfiguration		(SCNetworkInterfaceRef  interface,
+						 CFStringRef		extendedType,
+						 CFDictionaryRef	config,
+						 Boolean		okToHold);
+
+void
+__SCNetworkInterfaceSetDeepConfiguration	(SCNetworkInterfaceRef  interface,
+						 CFArrayRef		configs);
+
+Boolean
+__SCNetworkInterfaceSupportsVLAN		(CFStringRef		bsd_if);
+
+void
+__SCBondInterfaceListCopyMembers		(CFArrayRef 		interfaces,
+						 CFMutableSetRef 	set);
+
+#pragma mark -
+#pragma mark SCNetworkProtocol configuration (internal)
 
 
 SCNetworkProtocolPrivateRef
@@ -145,33 +237,25 @@ __SCNetworkProtocolCreatePrivate		(CFAllocatorRef		allocator,
 Boolean
 __SCNetworkProtocolIsValidType			(CFStringRef		protocolType);
 
-SCNetworkInterfacePrivateRef
-__SCNetworkInterfaceCreateCopy			(CFAllocatorRef		allocator,
-						 SCNetworkInterfaceRef  interface,
-						 SCNetworkServiceRef    service);
 
-SCNetworkInterfacePrivateRef
-__SCNetworkInterfaceCreatePrivate		(CFAllocatorRef		allocator,
-						 SCNetworkInterfaceRef	interface,
-						 SCNetworkServiceRef	service,
-						 io_string_t		path);
+#pragma mark -
+#pragma mark SCNetworkService configuration (internal)
 
-SCNetworkInterfaceRef
-__SCNetworkInterfaceCreateWithEntity		(CFAllocatorRef		allocator,
-						 CFDictionaryRef	interface_entity,
-						 SCNetworkServiceRef	service);
 
-CFArrayRef
-__SCNetworkInterfaceCopyDeepConfiguration       (SCNetworkInterfaceRef  interface);
+SCNetworkServicePrivateRef
+__SCNetworkServiceCreatePrivate			(CFAllocatorRef		allocator,
+						 SCPreferencesRef	prefs,
+						 CFStringRef		serviceID,
+						 SCNetworkInterfaceRef	interface);
 
-Boolean
-__SCNetworkInterfaceSetConfiguration		(SCNetworkInterfaceRef  interface,
-						 CFDictionaryRef	config,
-						 Boolean		okToHold);
 
-void
-__SCNetworkInterfaceSetDeepConfiguration	(SCNetworkInterfaceRef  interface,
-						 CFArrayRef		configs);
+#pragma mark -
+#pragma mark SCNetworkSet configuration (internal)
+
+
+#pragma mark -
+#pragma mark Miscellaneous (internal)
+
 
 CFDictionaryRef
 __copyInterfaceTemplate				(CFStringRef		interfaceType,
@@ -209,9 +293,19 @@ Boolean
 __destroyInterface				(int			s,
 						 CFStringRef		interface);
 
+CFStringRef
+__SCPreferencesPathCreateUniqueChild_WithMoreSCFCompatibility
+						(SCPreferencesRef	prefs,
+						 CFStringRef		prefix);
+
 Boolean
-__markInterfaceUp				(int			s,
-						 CFStringRef		interface);
+__extract_password				(SCPreferencesRef	prefs,
+						 CFDictionaryRef	config,
+						 CFStringRef		passwordKey,
+						 CFStringRef		encryptionKey,
+						 CFStringRef		encryptionKeyChainValue,
+						 CFStringRef		unique_id,
+						 CFDataRef		*password);
 
 __END_DECLS
 

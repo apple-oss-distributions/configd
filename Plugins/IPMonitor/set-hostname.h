@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,34 +21,16 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _VLANCONFIGURATIONPRIVATE_H
-#define _VLANCONFIGURATIONPRIVATE_H
+#ifndef _SET_HOSTNAME_H
+#define _SET_HOSTNAME_H
 
-#include <AvailabilityMacros.h>
 #include <sys/cdefs.h>
 #include <CoreFoundation/CoreFoundation.h>
-#include <SystemConfiguration/VLANConfiguration.h>
-
-#if MAC_OS_X_VERSION_MAX_ALLOWED >= 1030
-
-/*!
-	@header VLANConfigurationPrivate
- */
-
-
-#define VLAN_PREFERENCES_ID	CFSTR("VirtualNetworkInterfaces.plist")
-
 
 __BEGIN_DECLS
 
-CFArrayRef
-_VLANPreferencesCopyActiveInterfaces	();
-
-Boolean
-_VLANPreferencesUpdateConfiguration	(VLANPreferencesRef	prefs);
+void	load_hostname		(Boolean	verbose);
 
 __END_DECLS
 
-#endif	/* MAC_OS_X_VERSION_MAX_ALLOWED >= 1030 */
-
-#endif /* _VLANCONFIGURATIONPRIVATE_H */
+#endif /* _SET_HOSTNAME_H */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004, 2006, 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -85,11 +85,15 @@ validate_proxy_content(CFMutableDictionaryRef	proxies,
 
 		if ((enabled != 0) && (port == NULL)) {
 			struct servent	*service;
+			int		s_port;
 
 			service = getservbyname(proxy_service, "tcp");
-			num = CFNumberCreate(NULL,
-					     kCFNumberIntType,
-					     (service != NULL) ? &service->s_port : &proxy_defaultport);
+			if (service != NULL) {
+				s_port = ntohs(service->s_port);
+			} else {
+				s_port = proxy_defaultport;
+			}
+			num = CFNumberCreate(NULL, kCFNumberIntType, &s_port);
 			CFDictionarySetValue(proxies, proxy_port, num);
 			CFRelease(num);
 		}
@@ -200,6 +204,23 @@ SCDynamicStoreCopyProxies(SCDynamicStoreRef store)
 			       NULL,
 			       NULL,
 			       0);
+
+	// validate FTP passive setting
+	num = CFDictionaryGetValue(newProxies, kSCPropNetProxiesFTPPassive);
+	if (num != NULL) {
+		int	enabled;
+
+		if (!isA_CFNumber(num) ||
+		    !CFNumberGetValue(num, kCFNumberIntType, &enabled)) {
+			// if we don't like the enabled key/value
+			enabled = 1;
+			num = CFNumberCreate(NULL, kCFNumberIntType, &enabled);
+			CFDictionarySetValue(newProxies,
+					     kSCPropNetProxiesFTPPassive,
+					     num);
+			CFRelease(num);
+		}
+	}
 
 	// validate WPAD setting
 	num = CFDictionaryGetValue(newProxies, kSCPropNetProxiesProxyAutoDiscoveryEnable);
