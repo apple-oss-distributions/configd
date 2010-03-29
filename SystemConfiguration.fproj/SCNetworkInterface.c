@@ -171,6 +171,7 @@ static SCNetworkInterfacePrivate __kSCNetworkInterfaceIPv4      = {
 	FALSE,					// modemIsV92
 	NULL,					// type
 	NULL,					// unit
+	{ NULL, 0, 0 },				// usb { name, vid, pid }
 	kSortUnknown,				// sort_order
 #if	!TARGET_OS_IPHONE
 	FALSE,					// supportsBond
@@ -324,14 +325,33 @@ __SCNetworkInterfaceCopyDescription(CFTypeRef cf)
 	if (interfacePrivate->location != NULL) {
 		CFStringAppendFormat(result, NULL, CFSTR(", location = %@"), interfacePrivate->location);
 	}
+	if (interfacePrivate->path != NULL) {
+		CFStringAppendFormat(result, NULL, CFSTR(", path = %@"), interfacePrivate->path);
+	}
 	if (interfacePrivate->type != NULL) {
 		CFStringAppendFormat(result, NULL, CFSTR(", type = %@"), interfacePrivate->type);
 	}
 	if (interfacePrivate->unit != NULL) {
 		CFStringAppendFormat(result, NULL, CFSTR(", unit = %@"), interfacePrivate->unit);
 	}
-	if (interfacePrivate->path != NULL) {
-		CFStringAppendFormat(result, NULL, CFSTR(", path = %@"), interfacePrivate->path);
+	if ((interfacePrivate->usb.vid != NULL) || (interfacePrivate->usb.pid != NULL)) {
+		int	pid;
+		int	vid;
+
+		if (!isA_CFNumber(interfacePrivate->usb.pid) ||
+		    !CFNumberGetValue(interfacePrivate->usb.vid, kCFNumberIntType, &pid)) {
+			pid = 0;
+		}
+		if (!isA_CFNumber(interfacePrivate->usb.vid) ||
+		    !CFNumberGetValue(interfacePrivate->usb.vid, kCFNumberIntType, &vid)) {
+			vid = 0;
+		}
+
+		CFStringAppendFormat(result, NULL, CFSTR(", USB%s%@ vid/pid = 0x%0x/0x%0x"),
+				     interfacePrivate->usb.name != NULL ? " name = " : "",
+				     interfacePrivate->usb.name != NULL ? interfacePrivate->usb.name : CFSTR(""),
+				     interfacePrivate->usb.vid,
+				     interfacePrivate->usb.pid);
 	}
 	if (interfacePrivate->configurationAction != NULL) {
 		CFStringAppendFormat(result, NULL, CFSTR(", action = %@"), interfacePrivate->configurationAction);
@@ -462,6 +482,15 @@ __SCNetworkInterfaceDeallocate(CFTypeRef cf)
 	if (interfacePrivate->unit != NULL)
 		CFRelease(interfacePrivate->unit);
 
+	if (interfacePrivate->usb.name != NULL)
+		CFRelease(interfacePrivate->usb.name);
+
+	if (interfacePrivate->usb.pid != NULL)
+		CFRelease(interfacePrivate->usb.pid);
+
+	if (interfacePrivate->usb.vid != NULL)
+		CFRelease(interfacePrivate->usb.vid);
+
 #if	!TARGET_OS_IPHONE
 	if (interfacePrivate->bond.interfaces != NULL)
 		CFRelease(interfacePrivate->bond.interfaces);
@@ -503,8 +532,19 @@ __SCNetworkInterfaceEqual(CFTypeRef cf1, CFTypeRef cf2)
 		return FALSE; // if not the same device
 	}
 
-	if (!_SC_CFEqual(if1->entity_device_unique, if2->entity_device_unique)) {
-		return FALSE; // if not the same device unique identifier
+	if ((if1->entity_device_unique != NULL) && (if2->entity_device_unique != NULL)) {
+		if (!_SC_CFEqual(if1->entity_device_unique, if2->entity_device_unique)) {
+			return FALSE; // if not the same device unique identifier
+		}
+	} else if ((if1->entity_device_unique != NULL) || (if2->entity_device_unique != NULL)) {
+		CFStringRef	name1;
+		CFStringRef	name2;
+
+		name1 = __SCNetworkInterfaceGetNonLocalizedDisplayName((SCNetworkInterfaceRef)if1);
+		name2 = __SCNetworkInterfaceGetNonLocalizedDisplayName((SCNetworkInterfaceRef)if2);
+		if ((name1 != NULL) && (name2 != NULL) && !_SC_CFEqual(name1, name2)) {
+			return FALSE; // if same device but not the same display name
+		}
 	}
 
 #if	!TARGET_OS_IPHONE
@@ -638,6 +678,9 @@ __SCNetworkInterfaceCreatePrivate(CFAllocatorRef	allocator,
 	interfacePrivate->modemIsV92			= FALSE;
 	interfacePrivate->type				= NULL;
 	interfacePrivate->unit				= NULL;
+	interfacePrivate->usb.name			= NULL;
+	interfacePrivate->usb.vid			= NULL;
+	interfacePrivate->usb.pid			= NULL;
 	interfacePrivate->sort_order			= kSortUnknown;
 #if	!TARGET_OS_IPHONE
 	interfacePrivate->supportsBond			= FALSE;
@@ -1345,6 +1388,36 @@ isBluetoothBuiltin(Boolean *haveController)
 }
 
 
+static void
+processUSBInterface(SCNetworkInterfacePrivateRef	interfacePrivate,
+		    io_registry_entry_t			interface,
+		    CFDictionaryRef			interface_dict,
+		    io_registry_entry_t			controller,
+		    CFDictionaryRef			controller_dict,
+		    io_registry_entry_t			bus,
+		    CFDictionaryRef			bus_dict)
+{
+	// capture USB info
+	interfacePrivate->usb.name = IORegistryEntrySearchCFProperty(interface,
+								     kIOServicePlane,
+								     CFSTR(kUSBProductString),
+								     NULL,
+								     kIORegistryIterateRecursively | kIORegistryIterateParents);
+	interfacePrivate->usb.vid  = IORegistryEntrySearchCFProperty(interface,
+								     kIOServicePlane,
+								     CFSTR(kUSBVendorID),
+								     NULL,
+								     kIORegistryIterateRecursively | kIORegistryIterateParents);
+	interfacePrivate->usb.pid  = IORegistryEntrySearchCFProperty(interface,
+								     kIOServicePlane,
+								     CFSTR(kUSBProductID),
+								     NULL,
+								     kIORegistryIterateRecursively | kIORegistryIterateParents);
+
+	return;
+}
+
+
 #pragma mark -
 #pragma mark Interface enumeration
 
@@ -1398,6 +1471,14 @@ processNetworkInterface(SCNetworkInterfacePrivateRef	interfacePrivate,
 				interfacePrivate->interface_type	= kSCNetworkInterfaceTypeEthernet;
 				interfacePrivate->entity_type		= kSCValNetInterfaceTypeEthernet;
 				interfacePrivate->sort_order		= kSortBluetoothPAN;
+			} else if (IOObjectConformsTo(controller, "AppleUSBEthernetHost")) {
+				interfacePrivate->interface_type	= kSCNetworkInterfaceTypeEthernet;
+				interfacePrivate->entity_type		= kSCValNetInterfaceTypeEthernet;
+				interfacePrivate->sort_order		= kSortTethered;
+			} else if (IOObjectConformsTo(controller, "AppleUSBCDCECMData")) {
+				interfacePrivate->interface_type	= kSCNetworkInterfaceTypeEthernet;
+				interfacePrivate->entity_type		= kSCValNetInterfaceTypeEthernet;
+				interfacePrivate->sort_order		= kSortWWANEthernet;
 			} else {
 				str = IODictionaryCopyCFStringValue(bus_dict, CFSTR("name"));
 				if ((str != NULL) && CFEqual(str, CFSTR("radio"))) {
@@ -1416,13 +1497,6 @@ processNetworkInterface(SCNetworkInterfacePrivateRef	interfacePrivate,
 				}
 
 				if (str != NULL) CFRelease(str);
-			}
-
-			// check if WWAN Ethernet
-			if (IOObjectConformsTo(controller, "AppleUSBEthernetHost")) {
-				interfacePrivate->sort_order = kSortTethered;
-			} else if (IOObjectConformsTo(controller, "AppleUSBCDCECMData")) {
-				interfacePrivate->sort_order = kSortWWANEthernet;
 			}
 
 			// built-in
@@ -1498,19 +1572,24 @@ processNetworkInterface(SCNetworkInterfacePrivateRef	interfacePrivate,
 						}
 					} else if (CFEqual(provider, CFSTR("IOUSBDevice")) ||
 						   CFEqual(provider, CFSTR("IOUSBInterface"))) {
+
+						processUSBInterface(interfacePrivate,
+								    interface,
+								    interface_dict,
+								    controller,
+								    controller_dict,
+								    bus,
+								    bus_dict);
+
 						// check if a "Product Name" has been provided
 						val = IORegistryEntrySearchCFProperty(interface,
 										      kIOServicePlane,
 										      CFSTR(kIOPropertyProductNameKey),
 										      NULL,
 										      kIORegistryIterateRecursively | kIORegistryIterateParents);
-						if (val == NULL) {
-							// check if a "USB Product Name" has been provided
-							val = IORegistryEntrySearchCFProperty(interface,
-											      kIOServicePlane,
-											      CFSTR(kUSBProductString),
-											      NULL,
-											      kIORegistryIterateRecursively | kIORegistryIterateParents);
+						if ((val == NULL) && (interfacePrivate->usb.name != NULL)) {
+							// else, use "USB Product Name" if available
+							val = CFRetain(interfacePrivate->usb.name);
 						}
 						if (val != NULL) {
 							CFStringRef	productName;
@@ -2755,9 +2834,10 @@ _SCNetworkInterfaceCreateWithEntity(CFAllocatorRef		allocator,
 {
 	SCNetworkInterfacePrivateRef	interfacePrivate	= NULL;
 	CFStringRef			ifDevice;
-	CFStringRef			ifUnique;
+	CFStringRef			ifName			= NULL;
 	CFStringRef			ifSubType;
 	CFStringRef			ifType;
+	CFStringRef			ifUnique;
 	CFArrayRef			matching_interfaces	= NULL;
 
 	/* initialize runtime (and kSCNetworkInterfaceIPv4) */
@@ -2838,6 +2918,42 @@ _SCNetworkInterfaceCreateWithEntity(CFAllocatorRef		allocator,
 			// note: the "matching" dictionary will be consumed by the following
 			matching_interfaces = findMatchingInterfaces(matching, processSerialInterface);
 
+			if (ifUnique == NULL) {
+				CFIndex	n;
+				Boolean	useDeviceName	= TRUE;
+
+				n = (matching_interfaces != NULL) ? CFArrayGetCount(matching_interfaces) : 0;
+				if (n > 0) {
+					CFIndex	i;
+
+					for (i = 0; i < n; i++) {
+						SCNetworkInterfacePrivateRef	scanPrivate;
+
+						scanPrivate = (SCNetworkInterfacePrivateRef)CFArrayGetValueAtIndex(matching_interfaces, i);
+						if (scanPrivate->entity_device_unique != NULL) {
+							useDeviceName = FALSE;
+							break;
+						}
+					}
+				}
+
+				if (useDeviceName) {
+					if (matching_interfaces != NULL) {
+						CFRelease(matching_interfaces);
+					}
+
+					match_keys[1] = CFSTR(kIOTTYDeviceKey);
+					matching = CFDictionaryCreate(NULL,
+								      (const void **)match_keys,
+								      (const void **)match_vals,
+								      sizeof(match_keys)/sizeof(match_keys[0]),
+								      &kCFTypeDictionaryKeyCallBacks,
+								      &kCFTypeDictionaryValueCallBacks);
+
+					// note: the "matching" dictionary will be consumed by the following
+					matching_interfaces = findMatchingInterfaces(matching, processSerialInterface);
+				}
+			}
 		} else if (CFEqual(ifSubType, kSCValNetInterfaceSubTypeL2TP)) {
 			interfacePrivate = (SCNetworkInterfacePrivateRef)SCNetworkInterfaceCreateWithInterface(kSCNetworkInterfaceIPv4,
 													       kSCNetworkInterfaceTypeL2TP);
@@ -2903,18 +3019,49 @@ _SCNetworkInterfaceCreateWithEntity(CFAllocatorRef		allocator,
 				if (ifUnique != NULL) {
 					CFIndex	i;
 
+					// we are looking for an interface with a unique ID
+					// so let's try to focus our choices
 					for (i = 0; i < n; i++) {
-						SCNetworkInterfacePrivateRef	scan;
+						SCNetworkInterfacePrivateRef	scanPrivate;
 
-						scan = (SCNetworkInterfacePrivateRef)CFArrayGetValueAtIndex(matching_interfaces, i);
-						if (_SC_CFEqual(ifUnique, scan->entity_device_unique)) {
+						scanPrivate = (SCNetworkInterfacePrivateRef)CFArrayGetValueAtIndex(matching_interfaces, i);
+						if (_SC_CFEqual(ifUnique, scanPrivate->entity_device_unique)) {
 							if (interfacePrivate != NULL) {
 								// if we've matched more than one interface
 								interfacePrivate = NULL;
 								break;
 							}
-							interfacePrivate = scan;
+							interfacePrivate = scanPrivate;
 						}
+					}
+				} else if (CFDictionaryGetValueIfPresent(interface_entity,
+									kSCPropUserDefinedName,
+									(const void **)&ifName)) {
+					CFIndex	i;
+
+					// we don't have a unique ID but do have an interface
+					// name.  If the matching interfaces do have IDs than
+					// we can try to focus our choices using the name
+					for (i = 0; i < n; i++) {
+						SCNetworkInterfacePrivateRef	scanPrivate;
+
+						scanPrivate = (SCNetworkInterfacePrivateRef)CFArrayGetValueAtIndex(matching_interfaces, i);
+						if (scanPrivate->entity_device_unique != NULL) {
+							SCNetworkInterfaceRef	scan	= (SCNetworkInterfaceRef)scanPrivate;
+							CFStringRef		scanName;
+
+							scanName = __SCNetworkInterfaceGetNonLocalizedDisplayName(scan);
+							if ((scanName != NULL) && !_SC_CFEqual(ifName, scanName)) {
+								continue; // if not the same display name
+							}
+						}
+
+						if (interfacePrivate != NULL) {
+							// if we've matched more than one interface
+							interfacePrivate = NULL;
+							break;
+						}
+						interfacePrivate = scanPrivate;
 					}
 				}
 				if (interfacePrivate == NULL) {
@@ -5166,6 +5313,47 @@ SCNetworkInterfaceSetPassword(SCNetworkInterfaceRef		interface,
 #pragma mark SCNetworkInterface [InterfaceNamer] SPIs
 
 
+CFDictionaryRef
+_SCNetworkInterfaceCopyInterfaceInfo(SCNetworkInterfaceRef interface)
+{
+	CFMutableDictionaryRef		info;
+	SCNetworkInterfacePrivateRef	interfacePrivate	= (SCNetworkInterfacePrivateRef)interface;
+	CFStringRef			name;
+
+	info = CFDictionaryCreateMutable(NULL,
+					 0,
+					 &kCFTypeDictionaryKeyCallBacks,
+					 &kCFTypeDictionaryValueCallBacks);
+
+	// add non-localized interface name
+	name = __SCNetworkInterfaceGetNonLocalizedDisplayName(interface);
+	if (name != NULL) {
+		CFDictionaryAddValue(info, kSCPropUserDefinedName, name);
+	}
+
+	// add USB info
+	if ((interfacePrivate->usb.vid != NULL) || (interfacePrivate->usb.pid != NULL)) {
+		if (interfacePrivate->usb.name != NULL) {
+			CFDictionaryAddValue(info, CFSTR(kUSBProductString), interfacePrivate->usb.name);
+		}
+		if (interfacePrivate->usb.vid != NULL) {
+			CFDictionaryAddValue(info, CFSTR(kUSBVendorID), interfacePrivate->usb.vid);
+		}
+		if (interfacePrivate->usb.pid != NULL) {
+			CFDictionaryAddValue(info, CFSTR(kUSBProductID), interfacePrivate->usb.pid);
+		}
+	}
+
+	if (CFDictionaryGetCount(info) == 0) {
+		// do not return an empty dictionary
+		CFRelease(info);
+		info = NULL;
+	}
+
+	return info;
+}
+
+
 SCNetworkInterfaceRef
 _SCNetworkInterfaceCreateWithIONetworkInterfaceObject(io_object_t if_obj)
 {
@@ -5443,6 +5631,15 @@ __SCNetworkInterfaceCreateCopy(CFAllocatorRef		allocator,
 	}
 	if (oldPrivate->unit != NULL) {
 		newPrivate->unit		= CFRetain(oldPrivate->unit);
+	}
+	if (oldPrivate->usb.name != NULL) {
+		newPrivate->usb.name		= CFRetain(oldPrivate->usb.name);
+	}
+	if (oldPrivate->usb.vid != NULL) {
+		newPrivate->usb.vid		= CFRetain(oldPrivate->usb.vid);
+	}
+	if (oldPrivate->usb.pid != NULL) {
+		newPrivate->usb.pid		= CFRetain(oldPrivate->usb.pid);
 	}
 	newPrivate->sort_order			= oldPrivate->sort_order;
 #if	!TARGET_OS_IPHONE
