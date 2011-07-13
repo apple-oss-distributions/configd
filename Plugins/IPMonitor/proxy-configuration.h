@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002, 2004, 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2011 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,28 +21,23 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-/*
- * Modification History
- *
- * August 5, 2002	Allan Nathanson <ajn@apple.com>
- * - split code out from eventmon.c
- */
+#ifndef _PROXY_CONFIGURATION_H
+#define _PROXY_CONFIGURATION_H
 
-
-#ifndef _EV_APPLETALK_H
-#define _EV_APPLETALK_H
-
-#include <netat/appletalk.h>
-#include <netat/at_var.h>
+#include <TargetConditionals.h>
+#include <sys/cdefs.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 __BEGIN_DECLS
 
-void	interface_update_appletalk	(struct ifaddrs *ifap, const char *if_name);
-void	interface_update_atalk_address	(struct kev_atalk_data *aEvent, const char *if_name);
-void	interface_update_atalk_zone	(struct kev_atalk_data *aEvent, const char *if_name);
-void	interface_update_shutdown_atalk	();
+void		proxy_configuration_init	(CFBundleRef		bundle);
+
+
+CFDictionaryRef	proxy_configuration_update	(CFDictionaryRef	defaultProxy,
+						 CFDictionaryRef	services,
+						 CFArrayRef		serviceOrder);
 
 __END_DECLS
 
-#endif /* _EV_EVENTMON_H */
+#endif /* _PROXY_CONFIGURATION_H */
 

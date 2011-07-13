@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2010 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,22 +21,37 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _HELPER_COMM_H
-#define _HELPER_COMM_H
+#ifndef _HELPER_TYPES_H
+#define _HELPER_TYPES_H
 
-#include <sys/cdefs.h>
-#include <CoreFoundation/CoreFoundation.h>
+/*
+ * Keep IPC functions private to the framework
+ */
+#ifdef mig_external
+#undef mig_external
+#endif
+#define mig_external __private_extern__
 
-__BEGIN_DECLS
+/* Turn MIG type checking on by default */
+#ifdef __MigTypeCheck
+#undef __MigTypeCheck
+#endif
+#define __MigTypeCheck	1
 
-Boolean __SCHelper_txMessage(int	fd,
-			     uint32_t	msgID,
-			     CFDataRef	data);
+/*
+ * Mach server port name
+ */
+#define SCHELPER_SERVER	"com.apple.SystemConfiguration.helper"
 
-Boolean __SCHelper_rxMessage(int	fd,
-			     uint32_t	*msgID,
-			     CFDataRef	*data);
+/*
+ * Input arguments: serialized key's, list delimiters, ...
+ *	(sent as out-of-line data in a message)
+ */
+typedef const char * xmlData_t;
 
-__END_DECLS
+/* Output arguments: serialized data, lists, ...
+ *	(sent as out-of-line data in a message)
+ */
+typedef char * xmlDataOut_t;
 
-#endif /* _HELPER_COMM_H */
+#endif /* !_HELPER_TYPES_H */

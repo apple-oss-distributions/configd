@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2001, 2003-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2010, 2011 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,29 +24,22 @@
 /*
  * Modification History
  *
- * July 17, 2000		Allan Nathanson <ajn@apple.com>
+ * March1, 2010			Christophe Allie <callie@apple.com>
  * - initial revision
  */
 
-#ifndef __CFMANAGER_H
-#define __CFMANAGER_H
+#ifndef _NC_H
+#define _NC_H
 
-#include <CoreFoundation/CoreFoundation.h>
 #include <sys/cdefs.h>
+#include <SystemConfiguration/SystemConfiguration.h>
 
 
 __BEGIN_DECLS
 
-#ifdef	NOTNOW
-CFArrayRef	configRead	__P((const char *path));
-#endif	/* NOTNOW */
-void		configWrite	__P((const char *path, CFArrayRef config));
-#ifdef	NOTNOW
-void		configSet	__P((CFMutableArrayRef config, CFStringRef key, CFStringRef value));
-void		configRemove	__P((CFMutableArrayRef config, CFStringRef key));
-#endif	/* NOTNOW */
+int find_nc_cmd(char *cmd);
+void do_nc_cmd(char *cmd, int argc, char **argv, Boolean watch);
 
 __END_DECLS
 
-
-#endif	/* __CFMANAGER_H */
+#endif /* !_NC_H */
