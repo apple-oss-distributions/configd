@@ -1,3 +1,6 @@
+PROJECT=$(shell basename `pwd -P` | sed -e 's/\(.*\)-[0-9][0-9.]*$$/\1/')
+VERSION=$(shell basename `pwd -P` | sed -e 's/.*-\([0-9][0-9.]*$$\)/\1/')
+
 #----------------------------------------------------------------------
 #
 # Build for [current] release
@@ -9,33 +12,44 @@ all :
 	  -noinstallsrc -noinstallhdrs -noverify -nosum		\
 	  -arch i386 -arch x86_64 -arch ppc 			\
 	  -target All						\
-	  -project configd					\
+	  -project ${PROJECT}-${VERSION}			\
 	  -configuration Debug					\
 	  -release $(shell cat /usr/share/buildit/.releaseName)	\
 
 #----------------------------------------------------------------------
 #
-# Build for SnowLeopard, SUSnowXXX, ...
-#
-# Note: assumes that the "pppcontroller_sendmsg" routine has been defined
-#       in pppcontroller.defs.
+# Darwin build
 #
 #----------------------------------------------------------------------
 
-PROJECT=$(shell basename `pwd -P`)
-
-SNOW_CFLAGS += -D__MAC_10_7=1060
-SNOW_CFLAGS += -D__AVAILABILITY_INTERNAL__MAC_10_7=__AVAILABILITY_INTERNAL__MAC_10_6
-SNOW_CFLAGS += -D__AVAILABILITY_INTERNAL__MAC_10_5_DEP__MAC_10_7=__AVAILABILITY_INTERNAL__MAC_10_5
-#SNOW_CFLAGS += -DHAVE_PPPCONTROLLER_SENDMSG=YES
-
-snow :
+darwin :
 	/usr/local/bin/buildit .				\
 	  -noinstallsrc -noinstallhdrs -noverify -nosum		\
-	  -arch i386 -arch x86_64 -arch ppc			\
+	  -arch i386 -arch x86_64 -arch ppc 			\
 	  -target All						\
-	  -project ${PROJECT}					\
+	  -project ${PROJECT}_darwin-${VERSION}			\
 	  -configuration Debug					\
 	  -release $(shell cat /usr/share/buildit/.releaseName)	\
-	  -othercflags "\"$(SNOW_CFLAGS)\""			\
+	  -othercflags "\"-D_OPEN_SOURCE_\""			\
+
+#----------------------------------------------------------------------
+#
+# Build for Lion, SULionXXX, ...
+#
+#----------------------------------------------------------------------
+
+LION_CFLAGS=
+LION_CFLAGS+=-D__MAC_10_8=1070
+LION_CFLAGS+=-D__AVAILABILITY_INTERNAL__MAC_10_8=__attribute__((visibility(\\\"default\\\")))
+LION_CFLAGS+=-DHAVE_REACHABILITY_SERVER=YES
+
+lion :
+	/usr/local/bin/buildit .				\
+	  -noinstallsrc -noinstallhdrs -noverify -nosum		\
+	  -arch i386 -arch x86_64				\
+	  -target All						\
+	  -project ${PROJECT}-${VERSION}			\
+	  -configuration Debug					\
+	  -release $(shell cat /usr/share/buildit/.releaseName)	\
+	  -othercflags "$(LION_CFLAGS)"				\
 

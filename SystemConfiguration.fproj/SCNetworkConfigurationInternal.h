@@ -29,6 +29,7 @@
 #include <CoreFoundation/CFRuntime.h>
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPreferencesPathKey.h>
+#include <SystemConfiguration/SCNetworkConfigurationPrivate.h>
 #include <IOKit/IOKitLib.h>
 
 
@@ -112,6 +113,9 @@ typedef struct {
 	// prefs (for associated service, BOND interfaces, and VLAN interfaces)
 	SCPreferencesRef	prefs;
 
+	// SCDynamicStore
+	SCDynamicStoreRef	store;
+
 	// serviceID (NULL if not associated with a service)
 	CFStringRef		serviceID;
 
@@ -136,6 +140,7 @@ typedef struct {
 	Boolean			hidden;
 	CFStringRef		location;
 	CFStringRef		path;
+	uint64_t		entryID;
 	CFMutableDictionaryRef	overrides;
 	Boolean			modemIsV92;
 	CFNumberRef		type;
@@ -195,8 +200,7 @@ SCNetworkInterfacePrivateRef
 __SCNetworkInterfaceCreatePrivate		(CFAllocatorRef		allocator,
 						 SCNetworkInterfaceRef	interface,
 						 SCPreferencesRef	prefs,
-						 CFStringRef		serviceID,
-						 io_string_t		path);
+						 CFStringRef		serviceID);
 
 SCNetworkInterfacePrivateRef
 _SCBondInterfaceCreatePrivate			(CFAllocatorRef		allocator,
@@ -309,6 +313,7 @@ Boolean
 __SCNetworkServiceExistsForInterface		(CFArrayRef		services,
 						 SCNetworkInterfaceRef	interface);
 
+CF_RETURNS_RETAINED
 CFStringRef
 __SCNetworkServiceNextName			(SCNetworkServiceRef	service);
 
@@ -379,6 +384,14 @@ __remove_password				(SCPreferencesRef	prefs,
 						 CFStringRef		encryptionKeyChainValue,
 						 CFStringRef		unique_id,
 						 CFDictionaryRef	*newConfig);
+
+Boolean
+__rank_to_str					(SCNetworkServicePrimaryRank	rank,
+						 CFStringRef			*rankStr);
+
+Boolean
+__str_to_rank					(CFStringRef			rankStr,
+						 SCNetworkServicePrimaryRank	*rank);
 
 __END_DECLS
 

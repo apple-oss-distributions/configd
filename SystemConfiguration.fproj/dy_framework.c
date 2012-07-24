@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2008, 2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2008, 2010, 2011 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -45,7 +45,7 @@ static void *
 __loadIOKit(void) {
 	static void *image = NULL;
 	if (NULL == image) {
-		const char	*framework		= "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit";
+		const char	*framework		= "/System/Library/Frameworks/IOKit.framework/IOKit";
 		struct stat	statbuf;
 		const char	*suffix			= getenv("DYLD_IMAGE_SUFFIX");
 		char		path[MAXPATHLEN];
@@ -63,7 +63,7 @@ __loadIOKit(void) {
 
 
 __private_extern__ CFMutableDictionaryRef
-_IOBSDNameMatching(mach_port_t masterPort, unsigned int options, const char *bsdName)
+_IOBSDNameMatching(mach_port_t masterPort, uint32_t options, const char *bsdName)
 {
 	#undef IOBSDNameMatching
 	static typeof (IOBSDNameMatching) *dyfunc = NULL;
@@ -218,6 +218,19 @@ _IORegistryEntryGetPath(io_registry_entry_t entry, const io_name_t plane, io_str
 }
 
 
+__private_extern__ kern_return_t
+_IORegistryEntryGetRegistryEntryID(io_registry_entry_t entry, uint64_t *entryID)
+{
+	#undef IORegistryEntryGetRegistryEntryID
+	static typeof (IORegistryEntryGetRegistryEntryID) *dyfunc = NULL;
+	if (!dyfunc) {
+		void *image = __loadIOKit();
+		if (image) dyfunc = dlsym(image, "IORegistryEntryGetRegistryEntryID");
+	}
+	return dyfunc ? dyfunc(entry, entryID) : KERN_FAILURE;
+}
+
+
 __private_extern__ CFTypeRef
 _IORegistryEntrySearchCFProperty(io_registry_entry_t entry, const io_name_t plane, CFStringRef key, CFAllocatorRef allocator, IOOptionBits options)
 {
@@ -263,11 +276,7 @@ static void *
 __loadSecurity(void) {
 	static void *image = NULL;
 	if (NULL == image) {
-#if	TARGET_OS_IPHONE
 		const char	*framework		= "/System/Library/Frameworks/Security.framework/Security";
-#else
-		const char	*framework		= "/System/Library/Frameworks/Security.framework/Versions/A/Security";
-#endif
 		struct stat	statbuf;
 		const char	*suffix			= getenv("DYLD_IMAGE_SUFFIX");
 		char		path[MAXPATHLEN];
@@ -283,8 +292,6 @@ __loadSecurity(void) {
 	return (void *)image;
 }
 
-#if	!TARGET_OS_IPHONE
-
 #define	SECURITY_FRAMEWORK_EXTERN(t, s)				\
 	__private_extern__ t					\
 	_ ## s()						\
@@ -297,6 +304,7 @@ __loadSecurity(void) {
 		return (dysym != NULL) ? *dysym : NULL;		\
 	}
 
+#if	!TARGET_OS_IPHONE
 SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecAttrService)
 SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecClass)
 SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecClassGenericPassword)
@@ -487,6 +495,7 @@ _SecKeychainItemModifyContent(SecKeychainItemRef itemRef, const SecKeychainAttri
 	return dyfunc ? dyfunc(itemRef, attrList, length, data) : -1;
 }
 
+
 __private_extern__ OSStatus
 _SecTrustedApplicationCreateFromPath(const char *path, SecTrustedApplicationRef *app)
 {
@@ -499,7 +508,24 @@ _SecTrustedApplicationCreateFromPath(const char *path, SecTrustedApplicationRef 
 	return dyfunc ? dyfunc(path, app) : -1;
 }
 
-#endif	// !TARGET_OS_IPHONE
+#else	// TARGET_OS_IPHONE
+
+SECURITY_FRAMEWORK_EXTERN(CFStringRef, kSecPropertyKeyValue)
+SECURITY_FRAMEWORK_EXTERN(CFStringRef, kSecPropertyKeyLabel)
+
+__private_extern__ CFArrayRef
+_SecCertificateCopyProperties(SecCertificateRef certRef)
+{
+	#undef SecCertificateCopyProperties
+	static typeof (SecCertificateCopyProperties) *dyfunc = NULL;
+	if (!dyfunc) {
+		void *image = __loadSecurity();
+		if (image) dyfunc = dlsym(image, "SecCertificateCopyProperties");
+	}
+	return dyfunc ? dyfunc(certRef) : NULL;
+}
+
+#endif	// TARGET_OS_IPHONE
 
 __private_extern__ SecCertificateRef
 _SecCertificateCreateWithData(CFAllocatorRef allocator, CFDataRef data)
