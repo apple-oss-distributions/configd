@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2008, 2010, 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2008, 2010-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,7 +35,6 @@
 #include <dlfcn.h>
 
 #include "dy_framework.h"
-
 
 
 #pragma mark -
@@ -180,6 +179,19 @@ _IORegistryEntryCreateIterator(mach_port_t masterPort, const io_name_t plane, IO
 
 
 __private_extern__ kern_return_t
+_IORegistryEntryGetLocationInPlane(io_registry_entry_t entry, const io_name_t plane, io_name_t location)
+{
+#undef IORegistryEntryGetLocationInPlane
+	static typeof (IORegistryEntryGetLocationInPlane) *dyfunc = NULL;
+	if (!dyfunc) {
+		void *image = __loadIOKit();
+		if (image) dyfunc = dlsym(image, "IORegistryEntryGetLocationInPlane");
+	}
+	return dyfunc ? dyfunc(entry, plane, location) : KERN_FAILURE;
+}
+
+
+__private_extern__ kern_return_t
 _IORegistryEntryGetName(io_registry_entry_t entry, io_name_t name)
 {
 	#undef IORegistryEntryGetName
@@ -189,6 +201,19 @@ _IORegistryEntryGetName(io_registry_entry_t entry, io_name_t name)
 		if (image) dyfunc = dlsym(image, "IORegistryEntryGetName");
 	}
 	return dyfunc ? dyfunc(entry, name) : KERN_FAILURE;
+}
+
+
+__private_extern__ kern_return_t
+_IORegistryEntryGetNameInPlane(io_registry_entry_t entry, const io_name_t plane, io_name_t name)
+{
+	#undef IORegistryEntryGetNameInPlane
+	static typeof (IORegistryEntryGetNameInPlane) *dyfunc = NULL;
+	if (!dyfunc) {
+		void *image = __loadIOKit();
+		if (image) dyfunc = dlsym(image, "IORegistryEntryGetNameInPlane");
+	}
+	return dyfunc ? dyfunc(entry, plane, name) : KERN_FAILURE;
 }
 
 
@@ -312,6 +337,9 @@ SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecMatchLimit)
 SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecMatchLimitAll)
 SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecMatchSearchList)
 SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecReturnRef)
+SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecGuestAttributePid)
+SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecCodeInfoIdentifier)
+SECURITY_FRAMEWORK_EXTERN(CFTypeRef, kSecCodeInfoUnique)
 
 __private_extern__ OSStatus
 _AuthorizationMakeExternalForm(AuthorizationRef authorization, AuthorizationExternalForm *extForm)
@@ -538,4 +566,5 @@ _SecCertificateCreateWithData(CFAllocatorRef allocator, CFDataRef data)
 	}
 	return dyfunc ? dyfunc(allocator, data) : NULL;
 }
+
 

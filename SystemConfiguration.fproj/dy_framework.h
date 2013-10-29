@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2008, 2010, 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2008, 2010-2013 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -109,11 +109,27 @@ _IORegistryEntryCreateIterator		(
 #define IORegistryEntryCreateIterator _IORegistryEntryCreateIterator
 
 kern_return_t
+_IORegistryEntryGetLocationInPlane	(
+					io_registry_entry_t     entry,
+					const io_name_t         plane,
+					io_name_t               location
+					);
+#define	IORegistryEntryGetLocationInPlane _IORegistryEntryGetLocationInPlane
+
+kern_return_t
 _IORegistryEntryGetName			(
 					io_registry_entry_t	entry,
 					io_name_t               name
 					);
 #define	IORegistryEntryGetName _IORegistryEntryGetName
+
+kern_return_t
+_IORegistryEntryGetNameInPlane		(
+					io_registry_entry_t     entry,
+					const io_name_t         plane,
+					io_name_t               name
+					);
+#define	IORegistryEntryGetNameInPlane _IORegistryEntryGetNameInPlane
 
 kern_return_t
 _IORegistryEntryGetParentEntry		(
@@ -187,6 +203,15 @@ CFTypeRef _kSecMatchSearchList();
 
 CFTypeRef _kSecReturnRef();
 #define kSecReturnRef _kSecReturnRef()
+
+CFTypeRef _kSecGuestAttributePid();
+#define kSecGuestAttributePid _kSecGuestAttributePid()
+
+CFTypeRef _kSecCodeInfoIdentifier();
+#define kSecCodeInfoIdentifier _kSecCodeInfoIdentifier()
+
+CFTypeRef _kSecCodeInfoUnique();
+#define kSecCodeInfoUnique _kSecCodeInfoUnique()
 
 OSStatus
 _AuthorizationMakeExternalForm		(
@@ -338,6 +363,8 @@ _SecCertificateCreateWithData		(
 					CFDataRef			data
 					);
 #define SecCertificateCreateWithData _SecCertificateCreateWithData
+
+
 
 __END_DECLS
 

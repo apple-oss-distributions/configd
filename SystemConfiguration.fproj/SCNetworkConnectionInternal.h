@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2012, 2013 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,37 +21,18 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _SHARED_DNS_INFO_TYPES_H
-#define _SHARED_DNS_INFO_TYPES_H
+#ifndef _SCNETWORKCONNECTIONINTERNAL_H
+#define _SCNETWORKCONNECTIONINTERNAL_H
 
-/*
- * Keep IPC functions private to the framework
- */
-#ifdef mig_external
-#undef mig_external
-#endif
-#define mig_external __private_extern__
+#include <sys/cdefs.h>
 
-/* Turn MIG type checking on by default */
-#ifdef __MigTypeCheck
-#undef __MigTypeCheck
-#endif
-#define __MigTypeCheck	1
 
-/*
- * Mach server port name
- */
-#define DNS_SERVER	"com.apple.SystemConfiguration.configd"
+__BEGIN_DECLS
 
-/*
- * Input arguments: DNS configuration
- *	(sent as out-of-line data in a message)
- */
-typedef const char * dnsData_t;
+void		__SCNetworkConnectionForceOnDemandConfigurationRefresh(void);
+char *		__SCNetworkConnectionGetControllerPortName(void);
+CFDictionaryRef	__SCNetworkConnectionCopyTokenParameters(SCNetworkConnectionRef connection);
 
-/* Output arguments: DNS configuration
- *	(sent as out-of-line data in a message)
- */
-typedef char * dnsDataOut_t;
+__END_DECLS
 
-#endif	/* !_SHARED_DNS_INFO_TYPES_H */
+#endif	/* _SCNETWORKCONNECTIONINTERNAL_H */
