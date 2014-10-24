@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2001, 2003-2005, 2007-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003-2005, 2007-2014 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,6 +40,10 @@
 #include <unistd.h>
 #include <bsm/libbsm.h>
 #include <sandbox.h>
+
+#if !TARGET_IPHONE_SIMULATOR || (defined(IPHONE_SIMULATOR_HOST_MIN_VERSION_REQUIRED) && (IPHONE_SIMULATOR_HOST_MIN_VERSION_REQUIRED >= 1090))
+#define HAVE_MACHPORT_GUARDS
+#endif
 
 
 /* information maintained for each active session */
@@ -112,13 +116,11 @@ tempSession(mach_port_t server, CFStringRef name, audit_token_t auditToken)
 	temp_session->auditToken		= auditToken;
 	temp_session->callerEUID		= 1;		/* not "root" */
 	temp_session->callerRootAccess		= UNKNOWN;
-#if	TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 	if ((temp_session->callerWriteEntitlement != NULL) &&
 	    (temp_session->callerWriteEntitlement != kCFNull)) {
 		CFRelease(temp_session->callerWriteEntitlement);
 	}
 	temp_session->callerWriteEntitlement	= kCFNull;	/* UNKNOWN */
-#endif  // TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 
 	/* save name */
 	storePrivate = (SCDynamicStorePrivateRef)temp_session->store;
@@ -133,9 +135,11 @@ __private_extern__
 serverSessionRef
 addSession(mach_port_t server, CFStringRef (*copyDescription)(const void *info))
 {
-	CFMachPortContext	context	= { 0, NULL, NULL, NULL, NULL };
-	mach_port_t		mp	= server;
-	int			n	= -1;
+	CFMachPortContext	context		= { 0, NULL, NULL, NULL, NULL };
+	kern_return_t		kr;
+	mach_port_t		mp		= server;
+	int			n		= -1;
+	serverSessionRef	newSession	= NULL;
 
 	/* save current (SCDynamicStore) runloop */
 	if (sessionRunLoop == NULL) {
@@ -149,12 +153,18 @@ addSession(mach_port_t server, CFStringRef (*copyDescription)(const void *info))
 
 		nSessions = 64;
 		sessions = malloc(nSessions * sizeof(serverSessionRef));
+
+		// allocate a new session for "the" server
+		newSession = calloc(1, sizeof(serverSession));
 	} else {
-		int	i;
+		int			i;
+#ifdef	HAVE_MACHPORT_GUARDS
+		mach_port_options_t	opts;
+#endif	// HAVE_MACHPORT_GUARDS
 
 		/* check to see if we already have an open session (note: slot 0 is the "server" port) */
 		for (i = 1; i <= lastSession; i++) {
-			serverSessionRef	thisSession = sessions[i];
+			serverSessionRef	thisSession	= sessions[i];
 
 			if (thisSession == NULL) {
 				/* found an empty slot */
@@ -190,19 +200,45 @@ addSession(mach_port_t server, CFStringRef (*copyDescription)(const void *info))
 			}
 		}
 
+		// allocate a session for this client
+		newSession = calloc(1, sizeof(serverSession));
+
 		// create mach port for SCDynamicStore client
 		mp = MACH_PORT_NULL;
-		(void) mach_port_allocate(mach_task_self(),
-					  MACH_PORT_RIGHT_RECEIVE,
-					  &mp);
+
+	    retry_allocate :
+
+#ifdef	HAVE_MACHPORT_GUARDS
+		bzero(&opts, sizeof(opts));
+		opts.flags = MPO_CONTEXT_AS_GUARD;
+
+		kr = mach_port_construct(mach_task_self(), &opts, newSession, &mp);
+#else	// HAVE_MACHPORT_GUARDS
+		kr = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &mp);
+#endif	// HAVE_MACHPORT_GUARDS
+
+		if (kr != KERN_SUCCESS) {
+			char	*err	= NULL;
+
+			SCLog(TRUE, LOG_ERR, CFSTR("addSession: could not allocate mach port: %s"), mach_error_string(kr));
+			if ((kr == KERN_NO_SPACE) || (kr == KERN_RESOURCE_SHORTAGE)) {
+				sleep(1);
+				goto retry_allocate;
+			}
+
+			(void) asprintf(&err, "addSession: could not allocate mach port: %s", mach_error_string(kr));
+			_SC_crash(err != NULL ? err : "addSession: could not allocate mach port",
+				  NULL,
+				  NULL);
+			if (err != NULL) free(err);
+
+			free(newSession);
+			return NULL;
+		}
 	}
 
-	// allocate a new session for this server
-	sessions[n] = malloc(sizeof(serverSession));
-	bzero(sessions[n], sizeof(serverSession));
-
 	// create server port
-	context.info		 = sessions[n];
+	context.info		= newSession;
 	context.copyDescription = copyDescription;
 
 	//
@@ -210,29 +246,39 @@ addSession(mach_port_t server, CFStringRef (*copyDescription)(const void *info))
 	//       right present to ensure that CF does not establish
 	//       its dead name notification.
 	//
-	sessions[n]->serverPort = _SC_CFMachPortCreateWithPort("SCDynamicStore/session",
-							       mp,
-							       configdCallback,
-							       &context);
+	newSession->serverPort = _SC_CFMachPortCreateWithPort("SCDynamicStore/session",
+							      mp,
+							      configdCallback,
+							      &context);
 
 	if (n > 0) {
 		// insert send right that will be moved to the client
-		(void) mach_port_insert_right(mach_task_self(),
-					      mp,
-					      mp,
-					      MACH_MSG_TYPE_MAKE_SEND);
+		kr = mach_port_insert_right(mach_task_self(),
+					    mp,
+					    mp,
+					    MACH_MSG_TYPE_MAKE_SEND);
+		if (kr != KERN_SUCCESS) {
+			/*
+			 * We can't insert a send right into our own port!  This should
+			 * only happen if someone stomped on OUR port (so let's leave
+			 * the port alone).
+			 */
+			SCLog(TRUE, LOG_ERR, CFSTR("addSession mach_port_insert_right(): %s"), mach_error_string(kr));
+
+			free(newSession);
+			return NULL;
+		}
 	}
 
+	sessions[n] = newSession;
 	sessions[n]->key			= mp;
 //	sessions[n]->serverRunLoopSource	= NULL;
 //	sessions[n]->store			= NULL;
 	sessions[n]->callerEUID			= 1;		/* not "root" */
 	sessions[n]->callerRootAccess		= UNKNOWN;
-#if	TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 	sessions[n]->callerWriteEntitlement	= kCFNull;	/* UNKNOWN */
-#endif  // TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 
-	return sessions[n];
+	return newSession;
 }
 
 
@@ -271,9 +317,12 @@ cleanupSession(mach_port_t server)
 			/*
 			 * Our send right has already been removed. Remove our receive right.
 			 */
+#ifdef	HAVE_MACHPORT_GUARDS
+			(void) mach_port_destruct(mach_task_self(), server, 0, thisSession);
+#else	// HAVE_MACHPORT_GUARDS
 			(void) mach_port_mod_refs(mach_task_self(), server, MACH_PORT_RIGHT_RECEIVE, -1);
+#endif	// HAVE_MACHPORT_GUARDS
 
-#if	TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 			/*
 			 * release any entitlement info
 			 */
@@ -281,7 +330,6 @@ cleanupSession(mach_port_t server)
 			    (thisSession->callerWriteEntitlement != kCFNull)) {
 				CFRelease(thisSession->callerWriteEntitlement);
 			}
-#endif  // TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 
 			/*
 			 * We don't need any remaining information in the
@@ -373,8 +421,6 @@ listSessions(FILE *f)
 }
 
 
-#if	TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
-
 #include <Security/Security.h>
 #include <Security/SecTask.h>
 
@@ -434,8 +480,6 @@ copyEntitlement(serverSessionRef session, CFStringRef entitlement)
 
 	return value;
 }
-
-#endif  // TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 
 
 static pid_t
@@ -548,7 +592,6 @@ hasWriteAccess(serverSessionRef session, CFStringRef key)
 		//return FALSE;		// return FALSE when rdar://9811832 has beed fixed
 	}
 
-#if	TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 	if (session->callerWriteEntitlement == kCFNull) {
 		session->callerWriteEntitlement = copyEntitlement(session,
 								  kSCWriteEntitlementName);
@@ -598,7 +641,6 @@ hasWriteAccess(serverSessionRef session, CFStringRef key)
 			}
 		}
 	}
-#endif  // TARGET_OS_IPHONE || (__MAC_OS_X_VERSION_MIN_REQUIRED >= 1080/*FIXME*/)
 
 	return FALSE;
 }
