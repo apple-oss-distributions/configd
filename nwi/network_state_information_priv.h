@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013, 2016 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,8 +21,8 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _NETWORK_INFORMATION_PRIV_H_
-#define _NETWORK_INFORMATION_PRIV_H_
+#ifndef _NETWORK_STATE_INFORMATION_PRIV_H_
+#define _NETWORK_STATE_INFORMATION_PRIV_H_
 
 #include <CommonCrypto/CommonDigest.h>
 #include <net/if.h>
@@ -330,5 +330,4 @@ void
 _nwi_state_compute_sha1_hash(nwi_state_t state,
 			     unsigned char hash[CC_SHA1_DIGEST_LENGTH]);
 
-
-#endif
+#endif // _NETWORK_STATE_INFORMATION_PRIV_H_

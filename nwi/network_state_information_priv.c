@@ -28,7 +28,7 @@
 #include <sys/socket.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include "network_information_priv.h"
+#include "network_state_information_priv.h"
 #include <limits.h>
 #include <stdio.h>
 #include <syslog.h>
@@ -657,7 +657,7 @@ _nwi_state_update_interface_generations(nwi_state_t old_state, nwi_state_t state
 
 	for (i = 0, scan = nwi_state_ifstate_list(state, AF_INET);
 	     i < state->ipv4_count; i++, scan++) {
-		if (_nwi_ifstate_has_changed(changes, scan->ifname) == TRUE) {
+		if (_nwi_ifstate_has_changed(changes, scan->ifname)) {
 			/* Update the interface generation count */
 			_nwi_ifstate_set_generation(scan, generation_count);
 		} else {
@@ -666,6 +666,7 @@ _nwi_state_update_interface_generations(nwi_state_t old_state, nwi_state_t state
 			old_ifstate = nwi_state_get_ifstate_with_name(old_state,
 								      AF_INET,
 								      scan->ifname);
+			assert(old_ifstate != NULL);
 			
 			/* Set the current generation count */
 			_nwi_ifstate_set_generation(scan,
@@ -680,7 +681,7 @@ _nwi_state_update_interface_generations(nwi_state_t old_state, nwi_state_t state
 		    generation_count) {
 			continue;
 		}
-		if (_nwi_ifstate_has_changed(changes, scan->ifname) == TRUE) {
+		if (_nwi_ifstate_has_changed(changes, scan->ifname)) {
 			/* update the interface generation count */
 			_nwi_ifstate_set_generation(scan, generation_count);
 		} else {
