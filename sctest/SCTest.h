@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -21,23 +21,28 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef CONFIGAGENTDEFINES_H
-#define CONFIGAGENTDEFINES_H
+#ifndef SCTest_h
+#define SCTest_h
 
-#import "config_agent_info.h"
+#import <Foundation/Foundation.h>
+#import "SCTestOptions.h"
+#import "SCTestUtils.h"
 
-#define kConfigAgentType                        "AgentType"
-#define kConfigAgentTypeGeneric                 "ConfigAgent"
+@interface SCTest : NSObject
 
-#define kConfigAgentTypeDNSMulticast            kConfigAgentTypeDNS "(m)"
-#define kConfigAgentTypeDNSPrivate              kConfigAgentTypeDNS "(p)"
+@property (atomic, retain) NSDictionary *options;
+@property (atomic) CPUUsageInfo *globalCPU;
+@property (atomic) timerInfo *globalTimer;
 
-#define kConfigAgentDNSNameServers              "NameServers"
-#define kConfigAgentDNSSearchDomains            "SearchDomains"
+- (instancetype)initWithOptions:(NSDictionary *)options;
+- (void)start;
+- (void)cleanupAndExitWithErrorCode:(int)error;
+- (BOOL)unitTest;
+- (void)waitFor:(double)seconds;
 
-#define kConfigAgentOutOfBandDataUUID           "OutOfBandDataUUID"
-#define kConfigAgentAgentName                   "AgentName"
-#define kConfigAgentAgentData                   "AgentData"
-#define kConfigAgentAgentUUID                   "AgentUUID"
++ (NSString *)command;
++ (NSString *)commandDescription;
 
-#endif /* CONFIGAGENTDEFINES_H */
+@end
+
+#endif /* SCTest_h */
