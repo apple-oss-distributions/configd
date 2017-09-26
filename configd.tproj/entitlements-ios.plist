@@ -24,6 +24,8 @@
 	</array>
 	<key>com.apple.private.necp.match</key>
 	<true/>
+	<key>com.apple.private.necp.policies</key>
+	<true/>
 	<key>com.apple.private.nehelper.privileged</key>
 	<true/>
 	<key>com.apple.private.snhelper</key>
@@ -31,8 +33,6 @@
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>com.apple.security.network.server</key>
-	<true/>
-	<key>com.apple.springboard.launchapplications</key>
 	<true/>
 	<key>com.apple.wifi.manager-access</key>
 	<true/>
@@ -43,6 +43,8 @@
 	<key>com.apple.networkd_privileged</key>
 	<true/>
 	<key>com.apple.networkd.modify_settings</key>
+	<true/>
+	<key>com.apple.frontboard.launchapplications</key>
 	<true/>
 </dict>
 </plist>

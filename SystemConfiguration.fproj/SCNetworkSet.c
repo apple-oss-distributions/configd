@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -467,7 +467,12 @@ SCNetworkSetAddService(SCNetworkSetRef set, SCNetworkServiceRef service)
 	ok = SCPreferencesPathSetLink(setPrivate->prefs, path, link);
 #ifdef	PREVENT_DUPLICATE_SERVICE_NAMES
 	if (ok) {
+		// We use the interface cache here to not reach into the
+		// IORegistry for every service we go through
+		_SCNetworkInterfaceCacheOpen();
 		ok = ensure_unique_service_name(service);
+		_SCNetworkInterfaceCacheClose();
+
 		if (!ok) {
 			// if we could not ensure a unique name, remove the (just added)
 			// link between the "set" and the "service"
@@ -1551,6 +1556,38 @@ skipInterface(SCNetworkInterfaceRef interface)
 }
 
 
+CFComparisonResult
+_SCNetworkSetCompare(const void *val1, const void *val2, void *context)
+{
+#pragma unused(context)
+	CFStringRef	id1;
+	CFStringRef	id2;
+	CFStringRef	name1;
+	CFStringRef	name2;
+	SCNetworkSetRef	s1	= (SCNetworkSetRef)val1;
+	SCNetworkSetRef	s2	= (SCNetworkSetRef)val2;
+
+	name1 = SCNetworkSetGetName(s1);
+	name2 = SCNetworkSetGetName(s2);
+
+	if (name1 != NULL) {
+		if (name2 != NULL) {
+			return CFStringCompare(name1, name2, 0);
+		} else {
+			return kCFCompareLessThan;
+		}
+	}
+
+	if (name2 != NULL) {
+		return kCFCompareGreaterThan;
+	}
+
+	id1 = SCNetworkSetGetSetID(s1);
+	id2 = SCNetworkSetGetSetID(s2);
+	return CFStringCompare(id1, id2, 0);
+}
+
+
 static Boolean
 __SCNetworkSetEstablishDefaultConfigurationForInterfaces(SCNetworkSetRef set, CFArrayRef interfaces, Boolean excludeHidden)
 {
@@ -1728,7 +1765,7 @@ __SCNetworkSetEstablishDefaultConfigurationForInterfaces(SCNetworkSetRef set, CF
 
 				service = SCNetworkServiceCreate(setPrivate->prefs, interface);
 				if (service == NULL) {
-					SC_log(LOG_INFO, "could not create service for \"%@\": %s",
+					SC_log(LOG_ERR, "could not create service for \"%@\": %s",
 					       SCNetworkInterfaceGetLocalizedDisplayName(interface),
 					       SCErrorString(SCError()));
 					ok = FALSE;
@@ -1737,7 +1774,7 @@ __SCNetworkSetEstablishDefaultConfigurationForInterfaces(SCNetworkSetRef set, CF
 
 				ok = SCNetworkServiceEstablishDefaultConfiguration(service);
 				if (!ok) {
-					SC_log(LOG_INFO, "could not estabish default configuration for \"%@\": %s",
+					SC_log(LOG_ERR, "could not estabish default configuration for \"%@\": %s",
 					       SCNetworkInterfaceGetLocalizedDisplayName(interface),
 					       SCErrorString(SCError()));
 					SCNetworkServiceRemove(service);
@@ -1747,7 +1784,7 @@ __SCNetworkSetEstablishDefaultConfigurationForInterfaces(SCNetworkSetRef set, CF
 
 				ok = SCNetworkSetAddService(set, service);
 				if (!ok) {
-					SC_log(LOG_INFO, "could not add service for \"%@\": %s",
+					SC_log(LOG_ERR, "could not add service for \"%@\": %s",
 					       SCNetworkInterfaceGetLocalizedDisplayName(interface),
 					       SCErrorString(SCError()));
 					SCNetworkServiceRemove(service);

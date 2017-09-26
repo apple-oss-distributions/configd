@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008, 2011-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008, 2011-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -28,6 +28,7 @@
  * - initial revision
  */
 
+#include <TargetConditionals.h>
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/param.h>
@@ -145,6 +146,9 @@ __private_extern__
 Boolean
 _prefs_open(CFStringRef name, CFStringRef prefsID)
 {
+#if	TARGET_OS_EMBEDDED
+	char			*env		= NULL;
+#endif	// TARGET_OS_EMBEDDED
 	CFMutableDictionaryRef	options		= NULL;
 	Boolean			useHelper	= FALSE;
 	Boolean			useOptions	= FALSE;
@@ -163,17 +167,33 @@ _prefs_open(CFStringRef name, CFStringRef prefsID)
 	}
 
 	if (getenv("SCPREFERENCES_REMOVE_WHEN_EMPTY") != NULL) {
-		// if we have options
-		useOptions = TRUE;
+		if (options == NULL) {
+			options = CFDictionaryCreateMutable(NULL,
+							    0,
+							    &kCFTypeDictionaryKeyCallBacks,
+							    &kCFTypeDictionaryValueCallBacks);
+			useOptions = TRUE;
+		}
+		CFDictionarySetValue(options, kSCPreferencesOptionRemoveWhenEmpty, kCFBooleanTrue);
+	}
+
+#if	TARGET_OS_EMBEDDED
+	env = getenv("SCPREFERENCES_PROTECTION_CLASS");
+	if (env != NULL) {
+		CFStringRef	str;
 
 		if (options == NULL) {
 			options = CFDictionaryCreateMutable(NULL,
 							    0,
 							    &kCFTypeDictionaryKeyCallBacks,
 							    &kCFTypeDictionaryValueCallBacks);
+			useOptions = TRUE;
 		}
-		CFDictionarySetValue(options, kSCPreferencesOptionRemoveWhenEmpty, kCFBooleanTrue);
+		str = CFStringCreateWithCString(NULL, env, kCFStringEncodingASCII);
+		CFDictionarySetValue(options, kSCPreferencesOptionProtectionClass, str);
+		CFRelease(str);
 	}
+#endif	// TARGET_OS_EMBEDDED
 
 	if (!useHelper && !useOptions) {
 		// if no helper/options needed
@@ -285,6 +305,8 @@ _prefs_commitRequired(int argc, char **argv, const char *command)
 static void
 get_ComputerName(int argc, char **argv)
 {
+#pragma unused(argc)
+#pragma unused(argv)
 	CFStringEncoding	encoding;
 	CFStringRef		hostname;
 
@@ -361,6 +383,8 @@ set_ComputerName(int argc, char **argv)
 static void
 get_HostName(int argc, char **argv)
 {
+#pragma unused(argc)
+#pragma unused(argv)
 	CFStringRef	hostname;
 	Boolean		ok;
 
@@ -441,6 +465,8 @@ set_HostName(int argc, char **argv)
 static void
 get_LocalHostName(int argc, char **argv)
 {
+#pragma unused(argc)
+#pragma unused(argv)
 	CFStringRef	hostname;
 
 	hostname = SCDynamicStoreCopyLocalHostName(NULL);
@@ -654,6 +680,7 @@ __private_extern__
 void
 do_prefs_lock(int argc, char **argv)
 {
+#pragma unused(argv)
 	Boolean	wait	= (argc > 0) ? TRUE : FALSE;
 
 	if (!SCPreferencesLock(prefs, wait)) {
@@ -669,6 +696,8 @@ __private_extern__
 void
 do_prefs_unlock(int argc, char **argv)
 {
+#pragma unused(argc)
+#pragma unused(argv)
 	if (!SCPreferencesUnlock(prefs)) {
 		SCPrint(TRUE, stdout, CFSTR("%s\n"), SCErrorString(SCError()));
 		return;
@@ -682,6 +711,8 @@ __private_extern__
 void
 do_prefs_commit(int argc, char **argv)
 {
+#pragma unused(argc)
+#pragma unused(argv)
 	if (!SCPreferencesCommitChanges(prefs)) {
 		SCPrint(TRUE, stdout, CFSTR("%s\n"), SCErrorString(SCError()));
 		return;
@@ -696,6 +727,8 @@ __private_extern__
 void
 do_prefs_apply(int argc, char **argv)
 {
+#pragma unused(argc)
+#pragma unused(argv)
 	if (!SCPreferencesApplyChanges(prefs)) {
 		SCPrint(TRUE, stdout, CFSTR("%s\n"), SCErrorString(SCError()));
 	}
@@ -736,13 +769,17 @@ __private_extern__
 void
 do_prefs_synchronize(int argc, char **argv)
 {
+#pragma unused(argc)
+#pragma unused(argv)
 	SCPreferencesSynchronize(prefs);
 	return;
 }
 
 
 static CFComparisonResult
-sort_paths(const void *p1, const void *p2, void *context) {
+sort_paths(const void *p1, const void *p2, void *context)
+{
+#pragma unused(context)
 	CFStringRef path1 = (CFStringRef)p1;
 	CFStringRef path2 = (CFStringRef)p2;
 	return CFStringCompare(path1, path2, 0);
@@ -821,6 +858,7 @@ __private_extern__
 void
 do_prefs_get(int argc, char **argv)
 {
+#pragma unused(argc)
 	CFDictionaryRef		dict;
 	CFStringRef		link;
 	CFIndex			n;
@@ -954,6 +992,7 @@ __private_extern__
 void
 do_prefs_remove(int argc, char **argv)
 {
+#pragma unused(argc)
 	CFStringRef	path;
 
 	path = CFStringCreateWithCString(NULL, argv[0], kCFStringEncodingUTF8);
@@ -976,6 +1015,68 @@ on_off_str(Boolean on)
 {
 	return (on ? "on" : "off");
 }
+
+/* -------------------- */
+
+#if	!TARGET_OS_IPHONE
+
+#include "InterfaceNamerControlPrefs.h"
+
+static void
+allow_new_interfaces_usage(void)
+{
+	fprintf(stderr, "usage: scutil --allow-new-interfaces [on|off|default]\n");
+	return;
+}
+
+__private_extern__
+void
+do_ifnamer(char * pref, int argc, char **argv)
+{
+	Boolean	allow	= FALSE;
+
+	if (argc > 1) {
+		allow_new_interfaces_usage();
+		exit(1);
+	}
+
+	if (strcmp(pref, "allow-new-interfaces")) {
+		exit(0);
+	}
+
+	if (argc == 0) {
+		SCPrint(TRUE, stdout, CFSTR("AllowNewInterfaces is %s\n"),
+			on_off_str(InterfaceNamerControlPrefsAllowNewInterfaces()));
+		exit(0);
+	}
+
+	if        ((strcasecmp(argv[0], "disable") == 0) ||
+		   (strcasecmp(argv[0], "no"     ) == 0) ||
+		   (strcasecmp(argv[0], "off"    ) == 0) ||
+		   (strcasecmp(argv[0], "0"      ) == 0)) {
+		allow = FALSE;
+	} else if ((strcasecmp(argv[0], "enable") == 0) ||
+		   (strcasecmp(argv[0], "yes"   ) == 0) ||
+		   (strcasecmp(argv[0], "on"   ) == 0) ||
+		   (strcasecmp(argv[0], "1"     ) == 0)) {
+		allow = TRUE;
+	} else if (strcasecmp(argv[0], "default") == 0) {
+		allow = FALSE;
+	} else {
+		allow_new_interfaces_usage();
+		exit(1);
+	}
+
+	if (!InterfaceNamerControlPrefsSetAllowNewInterfaces(allow)) {
+		SCPrint(TRUE, stderr, CFSTR("failed to set preferences\n"));
+		exit(2);
+	}
+
+	exit(0);
+	return;
+}
+
+#endif	// !TARGET_OS_IPHONE
 
 /* -------------------- */
 

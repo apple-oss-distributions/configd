@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright (c) 2004-2015 Apple Inc.
+# Copyright (c) 2004-2017 Apple Inc.
 #
 # get-mobility-info
 #
@@ -7,6 +7,30 @@
 #
 
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
+
+OUTDIR=""
+NO_PCAP=0
+NO_TAR=0
+
+while getopts f:PT OPTION ; do
+	case ${OPTION} in
+		f)
+		   OUTDIR="${OPTARG}"
+		   if [ ! -d "${OUTDIR}" ]; then
+			echo "# ${PROGNAME}: \"${OUTDIR}\" is not a directory"
+			exit 1
+		   fi
+		   ;;
+		P)
+		   NO_PCAP=1
+		   ;;
+		T)
+		   NO_TAR=1
+		   ;;
+		\?)
+		   ;;
+	esac
+done
 
 #
 # Disclaimer
@@ -45,12 +69,18 @@ else
 fi
 
 OUT="mobility-info-`date +'%Y.%m.%d.%H%M%S'`"
-OUTDIR="/var/tmp"
-if [ -d ~/Desktop ]; then
-	OUTDIR=~/Desktop
-elif [ "`readlink /tmp`" = "private/var/tmp" ]; then
-	OUTDIR=/Library/Logs/CrashReporter
-	mkdir -p ${OUTDIR}
+
+if [ -z $OUTDIR ]; then
+	OUTDIR="/var/tmp"
+	if [ -d ~/Desktop ]; then
+		OUTDIR=~/Desktop
+	elif [ "`readlink /tmp`" = "private/var/tmp" ]; then
+		OUTDIR=/Library/Logs/DiagnosticReports
+		if [ ! -d /Library/Logs/DiagnosticReports -a -d /Library/Logs/CrashReporter ]; then
+			OUTDIR=/Library/Logs/CrashReporter
+		fi
+		mkdir -p ${OUTDIR}
+	fi
 fi
 
 umask 077
@@ -61,18 +91,20 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-GZ_EXT=""
-GZ_OPT=""
-if [ -x /usr/bin/gzip ]; then
-	GZ_EXT=".gz"
-	GZ_OPT="-z"
-fi
+if [ $NO_TAR -eq 0 ]; then
+	GZ_EXT=""
+	GZ_OPT=""
+	if [ -x /usr/bin/gzip ]; then
+		GZ_EXT=".gz"
+		GZ_OPT="-z"
+	fi
 
-ARCHIVE=`mktemp -q "${OUTDIR}/${OUT}.tar${GZ_EXT}"`
-if [ $? -ne 0 ]; then
-	echo "Could not create snapshot archive"
-	rm -rf "${WORKDIR}"
-	exit 1
+	ARCHIVE=`mktemp -q "${OUTDIR}/${OUT}.tar${GZ_EXT}"`
+	if [ $? -ne 0 ]; then
+		echo "Could not create snapshot archive"
+		rm -rf "${WORKDIR}"
+		exit 1
+	fi
 fi
 
 cd "${WORKDIR}"
@@ -82,14 +114,35 @@ echo "Please wait, collecting information and statistics"
 echo ""
 
 #
+# collect packet capture with kernel ring buffer if available
+#
+stop_pcap () {
+	#
+	# Stop the packet capture
+	#
+	if [ ${PCAP_STARTED} -ne 0 ]; then
+		trap '' SIGINT
+		/usr/local/bin/netdiagnose stop packetcapture			2>&1
+		PCAP_STARTED=0
+	fi
+}
+
+PCAP_STARTED=0
+if [ -x /usr/local/bin/netdiagnose -a ${NO_PCAP} -ne 1 ]; then
+	trap stop_pcap SIGINT
+	/usr/local/bin/netdiagnose -p "${WORKDIR}" start packetcapture		2>&1
+	PCAP_STARTED=1
+fi
+
+#
 # get-network-info
 #
 if [ -x /System/Library/Frameworks/SystemConfiguration.framework/Resources/get-network-info ]; then
-	/System/Library/Frameworks/SystemConfiguration.framework/Resources/get-network-info -s -c "${WORKDIR}"
+	/System/Library/Frameworks/SystemConfiguration.framework/Resources/get-network-info -s -c -P "${WORKDIR}"
 elif [ -x /System/Library/Frameworks/SystemConfiguration.framework/get-network-info ]; then
-	/System/Library/Frameworks/SystemConfiguration.framework/get-network-info -s -c "${WORKDIR}"
+	/System/Library/Frameworks/SystemConfiguration.framework/get-network-info -s -c -P "${WORKDIR}"
 elif [ -x /System/Library/PrivateFrameworks/SystemConfiguration.framework/get-network-info ]; then
-	/System/Library/PrivateFrameworks/SystemConfiguration.framework/get-network-info -s -c "${WORKDIR}"
+	/System/Library/PrivateFrameworks/SystemConfiguration.framework/get-network-info -s -c -P "${WORKDIR}"
 fi
 
 #
@@ -631,19 +684,36 @@ fi
 wait
 
 #
-# collect everything into a single archive
+# Stop the packet capture
 #
-cd "${WORKDIR}/.."
-tar -c ${GZ_OPT} -f "${ARCHIVE}" "${OUT}"
-rm -rf "${WORKDIR}"
+stop_pcap
 
-if [ ${UID} -eq 0 ]; then
-	if [ -n "${SUDO_UID}" -a -n "${SUDO_GID}" ]; then
-		if [ ${UID} -ne ${SUDO_UID} ]; then
-			chown ${SUDO_UID}:${SUDO_GID} "${ARCHIVE}"
+if [ $NO_TAR -eq 0 ]; then
+	#
+	# collect everything into a single archive
+	#
+	cd "${WORKDIR}/.."
+	tar -c ${GZ_OPT} -f "${ARCHIVE}" "${OUT}"
+	rm -rf "${WORKDIR}"
+
+	if [ ${UID} -eq 0 ]; then
+		if [ -n "${SUDO_UID}" -a -n "${SUDO_GID}" ]; then
+			if [ ${UID} -ne ${SUDO_UID} ]; then
+				chown ${SUDO_UID}:${SUDO_GID} "${ARCHIVE}"
+			fi
 		fi
 	fi
+
+	echo "Network data collected to \"${ARCHIVE}\""
+else
+	mv "${WORKDIR}" "${OUTDIR}"
+
+	if [ ${UID} -eq 0 ]; then
+		if [ -n "${SUDO_UID}" -a -n "${SUDO_GID}" ]; then
+			if [ ${UID} -ne ${SUDO_UID} ]; then
+				chown -R ${SUDO_UID}:${SUDO_GID} "${OUTDIR}/${OUT}"
+			fi
+		fi
+	fi
+	echo "Network data collected to \"${OUTDIR}/${OUT}\""
 fi
-
-echo "Network data collected to \"${ARCHIVE}\""
-

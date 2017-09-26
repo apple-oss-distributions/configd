@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 Apple Inc.  All Rights Reserved.
+ * Copyright (c) 2012-2017 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -48,15 +48,13 @@
 
 #define kIsNULL				CFSTR("IsNULL")	/* CFBoolean */
 
-#ifdef TEST_ROUTELIST
-
-#define	my_log(__level, __format, ...)	SCPrint(TRUE, stdout, CFSTR(__format "\n"), ## __VA_ARGS__)
-
-#else /* TEST_ROUTELIST */
-
-#define	my_log(__level, __format, ...)	SC_log(__level, __format, ## __VA_ARGS__)
-
-#endif /* TEST_ROUTELIST */
+#ifndef	my_log
+  #ifdef TEST_ROUTELIST
+    #define	my_log(__level, __format, ...)	SCPrint(TRUE, stdout, CFSTR(__format "\n"), ## __VA_ARGS__)
+  #else /* TEST_ROUTELIST */
+    #define	my_log(__level, __format, ...)	SC_log(__level, __format, ## __VA_ARGS__)
+  #endif /* TEST_ROUTELIST */
+#endif	// !my_log
 
 os_log_t
 __log_IPMonitor();
@@ -74,10 +72,10 @@ const char *
 my_if_indextoname(unsigned int idx, char if_name[IFNAMSIZ]);
 
 boolean_t
-service_contains_protocol(CFDictionaryRef service, int af);
+service_contains_protocol(CFDictionaryRef service_dict, int af);
 
 boolean_t
-service_is_scoped_only(CFDictionaryRef service);
+service_is_scoped_only(CFDictionaryRef service_dict);
 
 boolean_t
 check_if_service_expensive(CFStringRef serviceID);

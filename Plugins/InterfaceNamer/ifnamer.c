@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2001-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -75,14 +75,18 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 
-#define	SC_LOG_HANDLE	__log_InterfaceNamer()
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCDPlugin.h>
 #include <SystemConfiguration/SCPrivate.h>
 #include <SystemConfiguration/SCValidation.h>
+#include "plugin_shared.h"
+#if	!TARGET_OS_IPHONE
+#include "InterfaceNamerControlPrefs.h"
+#endif	// !TARGET_OS_IPHONE
 
 #include <IOKit/IOKitLib.h>
 #include <IOKit/IOKitLibPrivate.h>
+#include <IOKit/IOKitKeysPrivate.h>
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOMessage.h>
 #include <IOKit/network/IONetworkController.h>
@@ -115,7 +119,7 @@ enum {
 #define WAIT_STACK_TIMEOUT_DEFAULT	300.0
 
 #define WAIT_QUIET_TIMEOUT_KEY		"WaitQuietTimeout"
-#define WAIT_QUIET_TIMEOUT_DEFAULT	60.0
+#define WAIT_QUIET_TIMEOUT_DEFAULT	240.0
 
 /*
  * S_connect
@@ -211,7 +215,8 @@ static CFArrayRef		S_vlans			= NULL;
 /*
  * Logging
  */
-static os_log_t
+__private_extern__
+os_log_t
 __log_InterfaceNamer()
 {
     static os_log_t	log = NULL;
@@ -243,6 +248,7 @@ addTimestamp(CFMutableDictionaryRef dict, CFStringRef key)
 static CFComparisonResult
 if_unit_compare(const void *val1, const void *val2, void *context)
 {
+#pragma unused(context)
     CFComparisonResult	res;
     CFNumberRef		type1;
     CFNumberRef		type2;
@@ -551,6 +557,7 @@ updateVirtualNetworkInterfaceConfiguration(SCPreferencesRef		prefs,
 					   SCPreferencesNotification	notificationType,
 					   void				*info)
 {
+#pragma unused(info)
     os_activity_t   activity;
 
     if ((notificationType & kSCPreferencesNotificationApply) != kSCPreferencesNotificationApply) {
@@ -595,12 +602,10 @@ updateVirtualNetworkInterfaceConfiguration(SCPreferencesRef		prefs,
 
 #if	!TARGET_OS_EMBEDDED
 
-#define	BT_PAN_NAME	"Bluetooth PAN"
-#define	BT_PAN_MAC	BT_PAN_NAME " (MAC)"
-
 static void
 updateBTPANInformation(const void *value, void *context)
 {
+#pragma unused(context)
     CFDataRef		addr;
     CFDictionaryRef	dict    = (CFDictionaryRef)value;
     CFStringRef		if_name;
@@ -625,11 +630,11 @@ updateBTPANInformation(const void *value, void *context)
 	return;
     }
 
-    CFDictionaryAddValue(S_state, CFSTR("_" BT_PAN_NAME "_"), if_name);
+    CFDictionaryAddValue(S_state, kInterfaceNamerKey_BT_PAN_Name, if_name);
 
     addr = CFDictionaryGetValue(dict, CFSTR(kIOMACAddress));
     if (isA_CFData(addr)) {
-	CFDictionaryAddValue(S_state, CFSTR("_" BT_PAN_MAC "_"), addr);
+	CFDictionaryAddValue(S_state, kInterfaceNamerKey_BT_PAN_Mac, addr);
     }
 
     return;
@@ -1468,6 +1473,96 @@ builtinCount(CFArrayRef if_list, CFIndex last, CFNumberRef if_type)
     return n;
 }
 
+#if	!TARGET_OS_IPHONE
+static boolean_t
+blockNewInterfaces()
+{
+    static boolean_t	    allow	= TRUE;
+    static dispatch_once_t  once;
+
+    dispatch_once(&once, ^{
+	allow = InterfaceNamerControlPrefsAllowNewInterfaces();
+    });
+
+    return !allow;
+}
+
+
+static boolean_t
+isConsoleLocked()
+{
+    CFArrayRef		console_sessions;
+    boolean_t		locked		    = FALSE;
+    io_registry_entry_t	root;
+
+    root = IORegistryGetRootEntry(kIOMasterPortDefault);
+    console_sessions = IORegistryEntryCreateCFProperty(root,
+						       CFSTR(kIOConsoleUsersKey),
+						       NULL,
+						       0);
+    if (isA_CFArray(console_sessions)) {
+	CFIndex	n;
+
+	n = CFArrayGetCount(console_sessions);
+	for (CFIndex i = 0; i < n; i++) {
+	    CFBooleanRef	isLocked;
+	    CFBooleanRef	isLoginDone;
+	    CFBooleanRef	onConsole;
+	    CFDictionaryRef	session;
+
+	    session = CFArrayGetValueAtIndex(console_sessions, i);
+	    if (!isA_CFDictionary(session)) {
+		// if not dictionary
+		continue;
+	    }
+
+	    if (!CFDictionaryGetValueIfPresent(session,
+					       CFSTR(kIOConsoleSessionOnConsoleKey),
+					       (const void **)&onConsole) ||
+		!isA_CFBoolean(onConsole) ||
+		!CFBooleanGetValue(onConsole)) {
+		// if not "on console" session
+		continue;
+	    }
+
+	    if ((n > 1) &&
+		CFDictionaryGetValueIfPresent(session,
+					      CFSTR(kIOConsoleSessionLoginDoneKey),
+					      (const void **)&isLoginDone) &&
+		isA_CFBoolean(isLoginDone) &&
+		!CFBooleanGetValue(isLoginDone)) {
+		// if @ loginwindow
+		SC_log(LOG_INFO, "multiple sessions, console @ loginwindow");
+		locked = TRUE;
+		goto done;
+	    }
+
+	    if (CFDictionaryGetValueIfPresent(session,
+					      CFSTR(kIOConsoleSessionScreenIsLockedKey),
+					      (const void **)&isLocked) &&
+		isA_CFBoolean(isLocked) &&
+		CFBooleanGetValue(isLocked)) {
+		// if screen locked
+		SC_log(LOG_INFO, "console screen locked");
+		locked = TRUE;
+		goto done;
+	    }
+	}
+    }
+
+    SC_log(LOG_INFO, "console not locked");
+
+  done :
+
+    if (console_sessions != NULL) {
+	CFRelease(console_sessions);
+    }
+    IOObjectRelease(root);
+
+    return locked;
+}
+#endif	// !TARGET_OS_IPHONE
+
 static __inline__ boolean_t
 isQuiet(void)
 {
@@ -1539,6 +1634,26 @@ nameInterfaces(CFMutableArrayRef if_list)
 						 if_list,
 						 i + 1,
 						 is_builtin ? kCFBooleanTrue : kCFBooleanFalse);
+
+#if	!TARGET_OS_IPHONE
+		if (!is_builtin &&
+		    (dbdict != NULL) &&
+		    blockNewInterfaces() &&
+		    !_SCNetworkInterfaceIsApplePreconfigured(interface) &&
+		    isConsoleLocked()) {
+		    CFDataRef	    addr;
+
+		    // if new (but matching) interface and console locked, ignore
+		    SC_log(LOG_NOTICE, "Console locked, network interface* ignored");
+		    SC_log(LOG_INFO, "  path = %@", path);
+		    addr = _SCNetworkInterfaceGetHardwareAddress(interface);
+		    if (addr != NULL) {
+			SC_log(LOG_INFO, "  addr = %@", addr);
+		    }
+		    continue;
+		}
+#endif	// !TARGET_OS_IPHONE
+
 		if (dbdict != NULL) {
 		    unit = CFDictionaryGetValue(dbdict, CFSTR(kIOInterfaceUnit));
 		    CFRetain(unit);
@@ -1580,6 +1695,25 @@ nameInterfaces(CFMutableArrayRef if_list)
 			unit = NULL;
 		    }
 		}
+
+#if	!TARGET_OS_IPHONE
+		if (!is_builtin &&
+		    (unit == NULL) &&
+		    blockNewInterfaces() &&
+		    !_SCNetworkInterfaceIsApplePreconfigured(interface) &&
+		    isConsoleLocked()) {
+		    CFDataRef	    addr;
+
+		    // if new interface and console locked, ignore
+		    SC_log(LOG_NOTICE, "Console locked, network interface ignored");
+		    SC_log(LOG_INFO, "  path = %@", path);
+		    addr = _SCNetworkInterfaceGetHardwareAddress(interface);
+		    if (addr != NULL) {
+			SC_log(LOG_INFO, "  addr = %@", addr);
+		    }
+		    continue;
+		}
+#endif	// !TARGET_OS_IPHONE
 
 		if (unit == NULL) {
 		    // not built-in (or built-in unit not available), allocate from
@@ -1708,6 +1842,27 @@ nameInterfaces(CFMutableArrayRef if_list)
 }
 
 #if	!TARGET_OS_IPHONE
+static Boolean
+isRecoveryOS()
+{
+    static Boolean	    isRecovery	= FALSE;
+    static dispatch_once_t  once;
+
+    /*
+     * We check to see if the UserEventAgent daemon is present.  If not, then
+     * we are most likely booted into the Recovery OS with no "SCMonitor"
+     * [UserEventAgent] plugin.
+     */
+    dispatch_once(&once, ^{
+	if ((access("/usr/libexec/UserEventAgent", X_OK) == -1) && (errno == ENOENT)) {
+	    isRecovery = TRUE;
+	}
+
+    });
+
+    return isRecovery;
+}
+
 static void
 updateNetworkConfiguration(CFArrayRef if_list)
 {
@@ -1721,11 +1876,15 @@ updateNetworkConfiguration(CFArrayRef if_list)
 
     set = SCNetworkSetCopyCurrent(prefs);
     if (set == NULL) {
-	SC_log(LOG_INFO, "No current set");
-	goto done;
+	SC_log(LOG_INFO, "No current set, adding default");
+	set = _SCNetworkSetCreateDefault(prefs);
+	if (set == NULL) {
+	    SC_log(LOG_NOTICE, "_SCNetworkSetCreateDefault() failed: %s", SCErrorString(SCError()));
+	    goto done;
+	}
     }
 
-    n = CFArrayGetCount(if_list);
+    n = (if_list != NULL) ? CFArrayGetCount(if_list) : 0;
     for (i = 0; i < n; i++) {
 	SCNetworkInterfaceRef	interface;
 
@@ -1770,6 +1929,58 @@ updateNetworkConfiguration(CFArrayRef if_list)
 #endif	// !TARGET_OS_IPHONE
 
 static void
+updatePreConfigured(CFArrayRef interfaces)
+{
+    CFIndex		i;
+    CFIndex		n;
+    CFMutableArrayRef	new_list    = NULL;
+    Boolean		updated	    = FALSE;
+
+    n = (interfaces != NULL) ? CFArrayGetCount(interfaces) : 0;
+    for (i = 0; i < n; i++) {
+	SCNetworkInterfaceRef	interface;
+
+	interface = CFArrayGetValueAtIndex(interfaces, i);
+	if (_SCNetworkInterfaceIsApplePreconfigured(interface)) {
+	    CFStringRef	bsdName;
+
+	    bsdName = SCNetworkInterfaceGetBSDName(interface);
+	    if (bsdName == NULL) {
+		continue;
+	    }
+
+	    // add pre-configured interface
+	    if (new_list == NULL) {
+		CFArrayRef	cur_list;
+
+		cur_list = CFDictionaryGetValue(S_state, kInterfaceNamerKey_PreConfiguredInterfaces);
+		if (cur_list != NULL) {
+		    new_list = CFArrayCreateMutableCopy(NULL, 0, cur_list);
+		} else {
+		    new_list = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+		}
+	    }
+
+	    if (!CFArrayContainsValue(new_list, CFRangeMake(0, CFArrayGetCount(new_list)), bsdName)) {
+		CFArrayAppendValue(new_list, bsdName);
+		updated = TRUE;
+	    }
+	}
+    }
+
+    if (new_list != NULL) {
+	if (updated) {
+	    CFDictionarySetValue(S_state, kInterfaceNamerKey_PreConfiguredInterfaces, new_list);
+	    updateStore();
+	}
+
+	CFRelease(new_list);
+    }
+
+    return;
+}
+
+static void
 updateInterfaces()
 {
     if (S_connect == MACH_PORT_NULL) {
@@ -1787,6 +1998,11 @@ updateInterfaces()
 	nameInterfaces(S_iflist);
     }
 
+    /*
+     * Update the list of [Apple] pre-configured interfaces
+     */
+    updatePreConfigured(S_iflist);
+
     if (isQuiet()) {
 	/*
 	 * The registry [matching] has quiesced so let's
@@ -1800,8 +2016,7 @@ updateInterfaces()
 	updateVirtualNetworkInterfaceConfiguration(NULL, kSCPreferencesNotificationApply, NULL);
 
 #if	!TARGET_OS_IPHONE
-	if (access("/usr/libexec/UserEventAgent",  X_OK) == -1
-	    && errno == ENOENT) {
+	if (isRecoveryOS()) {
 	    /*
 	     * We are most likely booted into the Recovery OS with no "SCMonitor"
 	     * UserEventAgent plugin running so let's make sure we update the
@@ -1868,6 +2083,7 @@ updateInterfaces()
 static void
 interfaceArrivalCallback(void *refcon, io_iterator_t iter)
 {
+#pragma unused(refcon)
     os_activity_t	activity;
     io_object_t		obj;
 
@@ -1909,6 +2125,7 @@ interfaceArrivalCallback(void *refcon, io_iterator_t iter)
 static void
 stackCallback(void *refcon, io_iterator_t iter)
 {
+#pragma unused(refcon)
     os_activity_t	activity;
     kern_return_t	kr;
     io_object_t		stack;
@@ -1964,6 +2181,8 @@ quietCallback(void		*refcon,
 	      natural_t		messageType,
 	      void		*messageArgument)
 {
+#pragma unused(refcon)
+#pragma unused(service)
     os_activity_t	activity;
 
     if (messageArgument != NULL) {
@@ -1977,7 +2196,7 @@ quietCallback(void		*refcon,
     os_activity_scope(activity);
 
     if (messageType == kIOMessageServiceBusyStateChange) {
-	addTimestamp(S_state, CFSTR("*QUIET*"));
+	addTimestamp(S_state, kInterfaceNamerKey_Quiet);
 	SC_log(LOG_INFO, "IOKit quiet");
     }
 
@@ -2139,6 +2358,8 @@ captureBusy()
 static void
 timerCallback(CFRunLoopTimerRef	timer, void *info)
 {
+#pragma unused(timer)
+#pragma unused(info)
     os_activity_t	activity;
 
     activity = os_activity_create("process IOKit timer",
@@ -2148,7 +2369,7 @@ timerCallback(CFRunLoopTimerRef	timer, void *info)
 
     // We've been waiting for IOKit to quiesce and it just
     // hasn't happenned.  Time to just move on!
-    addTimestamp(S_state, CFSTR("*TIMEOUT*"));
+    addTimestamp(S_state, kInterfaceNamerKey_Timeout);
 
     // log busy nodes
     SC_log(LOG_ERR, "timed out waiting for IOKit to quiesce");
@@ -2167,6 +2388,7 @@ timerCallback(CFRunLoopTimerRef	timer, void *info)
 static Boolean
 setup_IOKit(CFBundleRef bundle)
 {
+#pragma unused(bundle)
     uint32_t		busy;
     kern_return_t	kr;
     mach_port_t		masterPort	= MACH_PORT_NULL;
@@ -2333,6 +2555,7 @@ setup_IOKit(CFBundleRef bundle)
 static Boolean
 setup_Virtual(CFBundleRef bundle)
 {
+#pragma unused(bundle)
     // open a SCPreferences session
     S_prefs = SCPreferencesCreate(NULL, CFSTR(MY_PLUGIN_NAME), NULL);
     if (S_prefs == NULL) {
@@ -2450,6 +2673,7 @@ __private_extern__
 void
 load_InterfaceNamer(CFBundleRef bundle, Boolean bundleVerbose)
 {
+#pragma unused(bundleVerbose)
     pthread_attr_t  tattr;
     pthread_t	    tid;
 

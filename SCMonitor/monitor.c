@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -33,11 +33,13 @@
 #include <unistd.h>
 #include <CoreFoundation/CoreFoundation.h>
 
-#define	SC_LOG_HANDLE	__log_SCMonitor()
+#define	SC_LOG_HANDLE		__log_SCMonitor()
+#define SC_LOG_HANDLE_TYPE	static
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPrivate.h>
 
 #include <IOKit/IOKitLib.h>
+#include <IOKit/IOKitKeysPrivate.h>
 #include <IOKit/IOMessage.h>
 #include <ApplicationServices/ApplicationServices.h>
 #include "UserEventAgentInterface.h"
@@ -203,6 +205,7 @@ freeAuthorization(MyType *myInstance)
 static void
 open_NetworkPrefPane(MyType *myInstance)
 {
+#pragma unused(myInstance)
 	AEDesc		aeDesc	= { typeNull, NULL };
 	CFArrayRef	prefArray;
 	CFURLRef	prefURL;
@@ -392,7 +395,7 @@ notify_add(MyType *myInstance)
 		CFStringRef		message;
 		CFStringRef		name;
 
-#define MESSAGE_1 "The \"%@\" network interface has not been set up. To set up this interface, use Network Preferences."
+#define MESSAGE_1 "The “%@” network interface has not been set up. To set up this interface, use Network Preferences."
 
 		format = CFBundleCopyLocalizedString(bundle,
 						     CFSTR("MESSAGE_1"),
@@ -551,6 +554,67 @@ notify_configure(MyType *myInstance)
 
 #pragma mark -
 
+static Boolean
+onConsole()
+{
+	CFArrayRef		console_sessions;
+	Boolean			on		= FALSE;
+	io_registry_entry_t	root;
+	uid_t			uid		= geteuid();
+
+	root = IORegistryGetRootEntry(kIOMasterPortDefault);
+	console_sessions = IORegistryEntryCreateCFProperty(root,
+							   CFSTR(kIOConsoleUsersKey),
+							   NULL,
+							   0);
+	if (console_sessions != NULL) {
+		CFIndex	n;
+
+		n = isA_CFArray(console_sessions) ? CFArrayGetCount(console_sessions) : 0;
+		for (CFIndex i = 0; i < n; i++) {
+			CFBooleanRef	bVal;
+			CFDictionaryRef	session;
+			uint64_t	sessionUID;
+			CFNumberRef	val;
+
+			session = CFArrayGetValueAtIndex(console_sessions, i);
+			if (!isA_CFDictionary(session)) {
+				// if not dictionary
+				continue;
+			}
+
+			if (!CFDictionaryGetValueIfPresent(session,
+							   CFSTR(kIOConsoleSessionUIDKey),
+							   (const void **)&val) ||
+			    !isA_CFNumber(val) ||
+			    !CFNumberGetValue(val, kCFNumberSInt64Type, (void *)&sessionUID) ||
+			    (uid != sessionUID)) {
+				// if not my session
+				continue;
+			}
+
+			if (CFDictionaryGetValueIfPresent(session,
+							  CFSTR(kIOConsoleSessionOnConsoleKey),
+							  (const void **)&bVal) &&
+			    isA_CFBoolean(bVal) &&
+			    CFBooleanGetValue(bVal)) {
+				// if "on console" session
+				on = TRUE;
+			}
+
+			break;
+		}
+
+		CFRelease(console_sessions);
+	}
+	IOObjectRelease(root);
+
+	return on;
+}
+
+
+#pragma mark -
+
 
 // configure ONLY IF authorized
 #define kSCNetworkInterfaceConfigurationActionValueConfigureAuthorized	CFSTR("Configure-Authorized")
@@ -566,6 +630,10 @@ updateInterfaceList(MyType *myInstance)
 	CFIndex			n;
 	SCPreferencesRef	prefs;
 	SCNetworkSetRef		set		= NULL;
+
+	if (!onConsole()) {
+		return;
+	}
 
 	prefs = SCPreferencesCreate(NULL, CFSTR("SCMonitor"), NULL);
 	if (prefs == NULL) {
@@ -713,6 +781,8 @@ updateInterfaceList(MyType *myInstance)
 static void
 update_lan(SCDynamicStoreRef store, CFArrayRef changes, void * arg)
 {
+#pragma unused(store)
+#pragma unused(changes)
 	MyType	*myInstance	= (MyType *)arg;
 
 	updateInterfaceList(myInstance);
@@ -740,7 +810,7 @@ watcher_add_lan(MyType *myInstance)
 
 	// watch for changes to the list of network interfaces
 	keys = CFArrayCreate(NULL, (const void **)&key, 1, &kCFTypeArrayCallBacks);
-	SCDynamicStoreSetNotificationKeys(store, NULL, keys);
+	SCDynamicStoreSetNotificationKeys(store, keys, NULL);
 	CFRelease(keys);
 	myInstance->monitorRls = SCDynamicStoreCreateRunLoopSource(NULL, store, 0);
 	CFRunLoopAddSource(CFRunLoopGetCurrent(),
@@ -823,6 +893,7 @@ add_node_watcher(MyType *myInstance, io_registry_entry_t node, io_registry_entry
 static void
 update_node(void *refCon, io_service_t service, natural_t messageType, void *messageArgument)
 {
+#pragma unused(messageArgument)
 	CFIndex		i;
 	CFDataRef	myData		= (CFDataRef)refCon;
 	MyType		*myInstance;
@@ -843,7 +914,7 @@ update_node(void *refCon, io_service_t service, natural_t messageType, void *mes
 				return;
 			}
 
-			val = IORegistryEntryCreateCFProperty(service, CFSTR("Initializing"), NULL, 0);
+			val = IORegistryEntryCreateCFProperty(service, kSCNetworkInterfaceInitializingKey, NULL, 0);
 			if (val != NULL) {
 				initializing = (isA_CFBoolean(val) && CFBooleanGetValue(val));
 				CFRelease(val);
@@ -1296,6 +1367,7 @@ static UserEventAgentInterfaceStruct UserEventAgentInterfaceFtbl = {
 void *
 UserEventAgentFactory(CFAllocatorRef allocator, CFUUIDRef typeID)
 {
+#pragma unused(allocator)
 	MyType	*newOne	= NULL;
 
 	if (CFEqual(typeID, kUserEventAgentTypeID)) {

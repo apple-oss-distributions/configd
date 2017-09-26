@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -23,6 +23,7 @@
 
 #import "controller.h"
 #import <SystemConfiguration/SCPrivate.h>
+#import "ip_plugin.h"
 
 #define numberToNSNumber(x)	[NSNumber numberWithUnsignedInteger:x]
 
@@ -58,6 +59,7 @@ typedef struct resolverList {
 @property (nonatomic) NSMutableDictionary	*	floatingDNSAgentList;
 @property (nonatomic) NSMutableDictionary	*	policyDB;
 @property (nonatomic) NEPolicySession		*	policySession;
+@property (nonatomic) NEPolicySession		*	controlPolicySession;
 
 @end
 
@@ -173,56 +175,7 @@ typedef struct resolverList {
 
 - (NEPolicySession *)createPolicySession
 {
-	NEPolicySession *session = nil;
-#if !TARGET_OS_IPHONE
-	/* On OS X, since we cannot have entitlements, we open a kernel control
-	 * socket and use it to create a policy session
-	 */
-
-	/* Create kernel control socket */
-	int sock = -1;
-	struct ctl_info kernctl_info;
-	struct sockaddr_ctl kernctl_addr;
-	const char *controlName = NECP_CONTROL_NAME;
-
-	if ((sock = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL)) < 0)
-	{
-		SC_log(LOG_NOTICE, "Cannot create kernel control socket (errno = %d)\n", errno);
-		return nil;
-	}
-
-	bzero(&kernctl_info, sizeof(kernctl_info));
-	strlcpy(kernctl_info.ctl_name, controlName, sizeof(kernctl_info.ctl_name));
-	if (ioctl(sock, CTLIOCGINFO, &kernctl_info))
-	{
-		SC_log(LOG_NOTICE, "ioctl failed on kernel control socket (errno = %d)\n", errno);
-		close(sock);
-		return nil;
-	}
-
-	bzero(&kernctl_addr, sizeof(kernctl_addr));
-	kernctl_addr.sc_len = sizeof(kernctl_addr);
-	kernctl_addr.sc_family = AF_SYSTEM;
-	kernctl_addr.ss_sysaddr = AF_SYS_CONTROL;
-	kernctl_addr.sc_id = kernctl_info.ctl_id;
-	kernctl_addr.sc_unit = 0;
-	if (connect(sock, (struct sockaddr *)&kernctl_addr, sizeof(kernctl_addr)))
-	{
-		SC_log(LOG_NOTICE, "connect failed on kernel control socket (errno = %d)\n", errno);
-		close(sock);
-		return nil;
-	}
-
-	/* Create policy session */
-	session = [[NEPolicySession alloc] initWithSocket:sock];
-	if (session == nil) {
-		close(sock);
-	}
-#else	//!TARGET_OS_IPHONE
-	session = [[NEPolicySession alloc] init];
-#endif	//!TARGET_OS_IPHONE
-
-	return session;
+	return [[NEPolicySession alloc] init];
 }
 
 - (BOOL)isControllerReady
@@ -240,19 +193,15 @@ typedef struct resolverList {
 
 - (NSData *)dataForProxyArray:(CFArrayRef)proxy_array_for_data
 {
-	NSData *data = [NSPropertyListSerialization dataWithPropertyList:(__bridge id _Nonnull)(proxy_array_for_data)
-								  format:NSPropertyListBinaryFormat_v1_0
-								 options:0
-								   error:nil];
-
-	return data;
+	CFDataRef data = NULL;
+	(void)_SCSerialize(proxy_array_for_data, &data, NULL, NULL);
+	return (__bridge_transfer NSData *)data;
 }
 
 - (NSData *)dataForProxyDictionary:(CFDictionaryRef)domain_proxy
 {
 	NSData	*	data = nil;
 	CFMutableDictionaryRef domain_proxy_dict;
-	CFArrayRef	domain_proxy_array;
 
 	if (domain_proxy == NULL) {
 		SC_log(LOG_NOTICE, "Invalid domain proxy dict");
@@ -262,11 +211,8 @@ typedef struct resolverList {
 	domain_proxy_dict = CFDictionaryCreateMutableCopy(NULL, 0, domain_proxy);
 	CFDictionaryRemoveValue(domain_proxy_dict, kSCPropNetProxiesSupplementalMatchDomain);
 
-	domain_proxy_array = CFArrayCreate(NULL, (const void **)&domain_proxy_dict, 1, &kCFTypeArrayCallBacks);
+	data = (__bridge_transfer NSData *)(SCNetworkProxiesCreateProxyAgentData(domain_proxy_dict));
 	CFRelease(domain_proxy_dict);
-
-	data = [self dataForProxyArray:domain_proxy_array];
-	CFRelease(domain_proxy_array);
 
 	return data;
 }
@@ -689,6 +635,19 @@ typedef struct resolverList {
 	[self deleteAgentList:self.floatingProxyAgentList list:old_service_list];
 }
 
+- (BOOL)isGlobalProxy:(CFDictionaryRef)proxies
+{
+	if (CFDictionaryContainsKey(proxies, kSCPropNetProxiesBypassAllowed)) {
+		/*
+		 * Since we did not ask to "bypass" the proxies, this key will always
+		 * be present in a managed (global) proxy configuration
+		 */
+		return YES;
+	}
+
+	return NO;
+}
+
 - (void)processDefaultProxyChanges:(CFDictionaryRef)proxies
 {
 	CFArrayRef			global_proxy;
@@ -710,22 +669,34 @@ typedef struct resolverList {
 	CFRelease(proxies_copy);
 
 	if (global_proxy_count > 0) {
+		BOOL		spawnAgent = YES;
 		id		proxyAgent;
 		NSData *	data;
 
 		data = [self dataForProxyArray:global_proxy];
 		proxyAgent = [self.floatingProxyAgentList objectForKey:@proxyAgentDefault];
-		if (proxyAgent == nil) {
+		if (proxyAgent != nil) {
+			if (![data isEqual:[proxyAgent getAgentData]]) {
+				[self destroyFloatingAgent:proxyAgent];
+			} else {
+				spawnAgent = NO;
+			}
+		}
+
+		if (spawnAgent) {
+			AgentSubType subtype = kAgentSubTypeDefault;
+			NEPolicyConditionType conditionType = NEPolicyConditionTypeNone;
+			if ([self isGlobalProxy:proxies_copy]) {
+				SC_log(LOG_INFO, "Global proxy detected...");
+				conditionType = NEPolicyConditionTypeAllInterfaces;
+				subtype = kAgentSubTypeGlobal;
+			}
+
 			[self spawnFloatingAgent:[ProxyAgent class]
 					entity:@proxyAgentDefault
-					agentSubType:kAgentSubTypeDefault
-					addPolicyOfType:NEPolicyConditionTypeNone
+					agentSubType:subtype
+					addPolicyOfType:conditionType
 					publishData:data];
-		} else {
-			[proxyAgent updateAgentData:data];
-			if ([proxyAgent shouldUpdateAgent]) {
-				[self publishToAgent:proxyAgent];
-			}
 		}
 	} else {
 		/* No default proxy config OR generic (no protocols enabled) default proxy config.
@@ -797,9 +768,9 @@ typedef struct resolverList {
 	resolver_list_t	*resolvers	= NULL;
 
 	if ((dns_config->n_resolver > 0) && (dns_config->resolver != NULL)) {
-		int	a	= 0;
-		int	b	= 0;
-		int	c	= 0;
+		uint32_t	a	= 0;
+		uint32_t	b	= 0;
+		uint32_t	c	= 0;
 
 		resolvers = calloc(1, sizeof(resolver_list_t));
 		for (int i = 0; i < dns_config->n_resolver; i++) {
@@ -1189,7 +1160,7 @@ typedef struct resolverList {
 
 		// For default resolvers, their name will be '_defaultDNS', '_defaultDNS #2' so on...
 		if (resolvers->n_default_resolvers > 0 && resolvers->default_resolvers != NULL) {
-			for (int i = 0; i < resolvers->n_default_resolvers; i++) {
+			for (uint32_t i = 0; i < resolvers->n_default_resolvers; i++) {
 				dns_resolver_t *default_resolver = resolvers->default_resolvers[i];
 				NSData	*	data;
 				id		dnsAgent;
@@ -1233,7 +1204,7 @@ typedef struct resolverList {
 								    agentSubType:kAgentSubTypeMulticast];
 
 		if (resolvers->n_multicast_resolvers > 0 && resolvers->multicast_resolvers != NULL) {
-			for (int i = 0; i < resolvers->n_multicast_resolvers; i++) {
+			for (uint32_t i = 0; i < resolvers->n_multicast_resolvers; i++) {
 				dns_resolver_t * multicast_resolver = resolvers->multicast_resolvers[i];
 				id		 dnsAgent;
 				NSString *	 resolverName;
@@ -1277,7 +1248,7 @@ typedef struct resolverList {
 								  agentSubType:kAgentSubTypePrivate];
 
 		if (resolvers->n_private_resolvers > 0 && resolvers->private_resolvers != NULL) {
-			for (int i = 0; i < resolvers->n_private_resolvers; i++) {
+			for (uint32_t i = 0; i < resolvers->n_private_resolvers; i++) {
 				dns_resolver_t * private_resolver = resolvers->private_resolvers[i];
 				id		 dnsAgent;
 				NSString *	 resolverName;
@@ -1318,7 +1289,7 @@ typedef struct resolverList {
 	[self freeResolverList:resolvers];
 }
 
-- (void)processScopedDNSResolvers:(dns_config_t *)dns_config;
+- (void)processScopedDNSResolvers:(dns_config_t *)dns_config
 {
 	NSMutableArray	*	old_intf_list;
 	old_intf_list = [self getAgentList:self.floatingDNSAgentList
@@ -1331,13 +1302,13 @@ typedef struct resolverList {
 			NSData		*	data;
 			id			dnsAgent;
 			NSUInteger		idx;
-			char		*	if_name;
+			const char	*	if_name;
 			NSString	*	ns_if_name;
 			NSString	*	ns_if_name_with_prefix;
 			dns_resolver_t	*	resolver;
 
 			resolver = dns_config->scoped_resolver[i];
-			if_name = if_indextoname(resolver->if_index, buf);
+			if_name = my_if_indextoname(resolver->if_index, buf);
 			if (if_name) {
 				ns_if_name = @(if_name);
 				ns_if_name_with_prefix = [NSString stringWithFormat:@"%s%@", prefixForInterfaceName, ns_if_name];
@@ -1376,7 +1347,7 @@ typedef struct resolverList {
 	[self deleteAgentList:self.floatingDNSAgentList list:old_intf_list];
 }
 
-- (void)processServiceSpecificDNSResolvers:(dns_config_t *)dns_config;
+- (void)processServiceSpecificDNSResolvers:(dns_config_t *)dns_config
 {
 	NSMutableArray	*	old_service_list;
 	old_service_list = [self getAgentList:self.floatingDNSAgentList
@@ -1775,8 +1746,10 @@ done:
 			  domain:(NSString *)domain
 		  agentUUIDToUse:(NSUUID *)uuid
 		      policyType:(NEPolicyConditionType)policyType
+	 useControlPolicySession:(BOOL)useControlPolicySession
 {
 	NEPolicyCondition	*	condition = nil;
+	NEPolicySession		*	session;
 	uint32_t			multiple_entity_offset;
 	NEPolicy		*	newPolicy;
 	BOOL				ok;
@@ -1811,6 +1784,12 @@ done:
 			orderForSkip = SKIP_ORDER_FOR_DOMAIN_POLICY + typeOffset;
 			break;
 
+		case NEPolicyConditionTypeAllInterfaces:
+			order = INIT_ORDER_FOR_DEFAULT_POLICY + typeOffset + multiple_entity_offset;
+			condition = [NEPolicyCondition allInterfaces];
+			orderForSkip = SKIP_ORDER_FOR_DEFAULT_POLICY + typeOffset;
+			break;
+
 		case NEPolicyConditionTypeNone:
 			order = INIT_ORDER_FOR_DEFAULT_POLICY + typeOffset + multiple_entity_offset;
 			orderForSkip = SKIP_ORDER_FOR_DEFAULT_POLICY + typeOffset;
@@ -1831,7 +1810,24 @@ done:
 		return NO;
 	}
 
-	policyID1 = [self.policySession addPolicy:newPolicy];
+	if (useControlPolicySession) {
+		if (self.controlPolicySession == nil) {
+			/*	The NE policy session at "control" level for the controller */
+			self.controlPolicySession = [self createPolicySession];
+			if (self.controlPolicySession == nil) {
+				SC_log(LOG_NOTICE, "Could not create a control policy session for agent %@", [agent getAgentName]);
+				return NO;
+			}
+			[self.controlPolicySession setPriority:NEPolicySessionPriorityControl];
+		}
+		((ConfigAgent *)agent).preferredPolicySession = self.controlPolicySession;
+	} else {
+		((ConfigAgent *)agent).preferredPolicySession = self.policySession;
+	}
+
+	session = ((ConfigAgent *)agent).preferredPolicySession;
+
+	policyID1 = [session addPolicy:newPolicy];
 	if (policyID1 == 0) {
 		SC_log(LOG_NOTICE, "Could not add a netagent policy for agent %@", [agent getAgentName]);
 		return NO;
@@ -1847,13 +1843,13 @@ done:
 		return NO;
 	}
 
-	policyID2 = [self.policySession addPolicy:newPolicy];
+	policyID2 = [session addPolicy:newPolicy];
 	if (policyID2 == 0) {
 		SC_log(LOG_NOTICE, "Could not add a skip policy for agent %@", [agent getAgentName]);
 		return NO;
 	}
 
-	ok = [self.policySession apply];
+	ok = [session apply];
 	if (!ok) {
 		SC_log(LOG_NOTICE, "Could not apply policy for agent %@", [agent getAgentName]);
 		return NO;
@@ -1905,11 +1901,18 @@ done:
 	/* Add a policy if there is a valid type. If POLICY_TYPE_NO_POLICY, then ignore policies.
 	 * POLICY_TYPE_NO_POLICY will be set for service-specific agents, in which case we rely on
 	 * service owners to install custom policies to point at the agents. */
-	if (policyType >= NEPolicyResultTypeNone) {
+	if (policyType >= NEPolicyConditionTypeNone) {
+		BOOL useControlPolicySession = NO;
+		if (subtype == kAgentSubTypeGlobal) {
+			/* Policies for a Global scoped agents are at "control" level */
+			useControlPolicySession = YES;
+		}
+
 		ok = [self addPolicyToFloatingAgent:agent
 					     domain:entity
 				     agentUUIDToUse:[agent agentUUID]
-					 policyType:policyType];
+					 policyType:policyType
+				useControlPolicySession:useControlPolicySession];
 
 		if (!ok) {
 			[self unregisterAgent:agent];
@@ -1954,10 +1957,17 @@ done:
 		[dummyAgent updateAgentData:data];
 	}
 
+	BOOL useControlPolicySession = NO;
+	if (subtype == kAgentSubTypeGlobal) {
+		/* Policies for a Global scoped agents are at "control" level */
+		useControlPolicySession = YES;
+	}
+
 	BOOL ok = [self addPolicyToFloatingAgent:dummyAgent
 					domain:entity
 					agentUUIDToUse:[mapped_agent agentUUID]
-					policyType:policyType];
+					policyType:policyType
+					useControlPolicySession:useControlPolicySession];
 
 	if (!ok) {
 		return NO;
@@ -2025,19 +2035,20 @@ done:
 
 		policyArray = [self.policyDB objectForKey:[agent getAgentName]];
 		if (policyArray != nil) {
-			BOOL result = NO;
+			NEPolicySession *	session = ((ConfigAgent *)agent).preferredPolicySession;
+			BOOL 			result = NO;
 
 			for (NSNumber *policyID in policyArray) {
 				NSUInteger idVal;
 
 				idVal = [policyID unsignedIntegerValue];
-				result = [self.policySession removePolicyWithID:idVal];
+				result = [session removePolicyWithID:idVal];
 				if (result == NO) {
-					SC_log(LOG_NOTICE, "Could not remove policy %@ for agent %@", [self.policySession policyWithID:idVal], [agent getAgentName]);
+					SC_log(LOG_NOTICE, "Could not remove policy %@ for agent %@", [session policyWithID:idVal], [agent getAgentName]);
 				}
 			}
 
-			result = [self.policySession apply];
+			result = [session apply];
 			if (result == NO) {
 				SC_log(LOG_NOTICE, "Could not apply removed policies for agent %@", [agent getAgentName]);
 			}
@@ -2056,6 +2067,31 @@ done:
 		}
 
 		SC_log(LOG_INFO, "X - Destroyed agent %@", [agent getAgentName]);
+
+		/* Check if we need to close the "control" policy session */
+		if (self.controlPolicySession != nil) {
+			NSMutableArray *globalProxyAgentList;
+			NSMutableArray *globalDNSAgentList;
+			globalProxyAgentList = [self getAgentList:self.floatingProxyAgentList agentType:kAgentTypeProxy agentSubType:kAgentSubTypeGlobal];
+			globalDNSAgentList = [self getAgentList:self.floatingDNSAgentList agentType:kAgentTypeDNS agentSubType:kAgentSubTypeGlobal];
+
+			if ([globalProxyAgentList count] == 0 &&
+			    [globalDNSAgentList count] == 0) {
+				ok = [self.controlPolicySession removeAllPolicies];
+				if (!ok) {
+					SC_log(LOG_ERR, "Could not remove policies for agent %@", [agent getAgentName]);
+				}
+
+				ok = [self.controlPolicySession apply];
+				if (!ok) {
+					SC_log(LOG_ERR, "Could not apply policy change for agent %@", [agent getAgentName]);
+				}
+
+				self.controlPolicySession = nil;
+				SC_log(LOG_NOTICE, "Closed control policy session");
+			}
+		}
+
 		ok = YES;
 	}
 
