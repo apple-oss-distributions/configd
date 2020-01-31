@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005, 2009, 2012, 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2005, 2009, 2012, 2016, 2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,7 @@
 #include <sys/cdefs.h>
 #include <histedit.h>
 
-#define SC_LOG_HANDLE	_SC_LOG_DEFAULT()
+#define SC_LOG_HANDLE	_SC_LOG_DEFAULT
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPrivate.h>
 #include <SystemConfiguration/SCValidation.h>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2016, 2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,19 @@
 #include "eventmon.h"
 #include "ev_extra.h"
 
+
+
+#if	TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+static Boolean
+haveMobileWiFi()
+{
+	void * volatile	fn_WeakFunction = (void *)&(WiFiManagerClientCreate);
+	Boolean		haveFramework;
+
+	haveFramework = (fn_WeakFunction != NULL) ? TRUE : FALSE;
+	return haveFramework;
+}
+#endif	// TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
 
 
 static CFBooleanRef
@@ -77,11 +90,11 @@ ifexpensive_set(int s, const char * name, uint32_t expensive)
 	struct ifreq	ifr;
 	int		ret;
 
-	bzero(&ifr, sizeof(ifr));
+	memset(&ifr, 0, sizeof(ifr));
 	strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
 	ifr.ifr_expensive = expensive;
 	ret = ioctl(s, SIOCSIFEXPENSIVE, &ifr);
-	if (ret == -1) {
+	if ((ret == -1) && (errno != EPERM)) {
 		SC_log(LOG_ERR, "%s: ioctl(SIOCSIFEXPENSIVE) failed: %s", name, strerror(errno));
 	}
 

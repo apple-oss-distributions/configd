@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2007, 2011, 2013, 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2007, 2011, 2013, 2015-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,7 @@
 #include <net/if.h>
 #include <net/if_media.h>
 
-#define	SC_LOG_HANDLE		__log_LinkConfiguration()
+#define	SC_LOG_HANDLE		__log_LinkConfiguration
 #define SC_LOG_HANDLE_TYPE	static
 #include "SCNetworkConfigurationInternal.h"
 #include <SystemConfiguration/SCDPlugin.h>		// for _SCDPluginExecCommand
@@ -55,7 +55,7 @@ static CFMutableDictionaryRef	wantSettings		= NULL;
 
 
 static os_log_t
-__log_LinkConfiguration()
+__log_LinkConfiguration(void)
 {
 	static os_log_t	log	= NULL;
 
@@ -123,7 +123,7 @@ _SCNetworkInterfaceSetCapabilities(SCNetworkInterfaceRef	interface,
 		return TRUE;
 	}
 
-	bzero((char *)&ifr, sizeof(ifr));
+	memset((char *)&ifr, 0, sizeof(ifr));
 	(void)_SC_cfstring_to_cstring(interfaceName, ifr.ifr_name, sizeof(ifr.ifr_name), kCFStringEncodingASCII);
 	ifr.ifr_curcap = cap_current;
 	ifr.ifr_reqcap = cap_requested;
@@ -262,16 +262,16 @@ _SCNetworkInterfaceSetMediaOptions(SCNetworkInterfaceRef	interface,
 		goto done;
 	}
 
-	bzero((char *)&ifm, sizeof(ifm));
+	memset((char *)&ifm, 0, sizeof(ifm));
 	(void)_SC_cfstring_to_cstring(interfaceName, ifm.ifm_name, sizeof(ifm.ifm_name), kCFStringEncodingASCII);
 
-	if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)&ifm) == -1) {
-		SC_log(LOG_ERR, "%@: ioctl(SIOCGIFMEDIA) failed: %s", interfaceName, strerror(errno));
+	if (ioctl(sock, SIOCGIFXMEDIA, (caddr_t)&ifm) == -1) {
+		SC_log(LOG_ERR, "%@: ioctl(SIOCGIFXMEDIA) failed: %s", interfaceName, strerror(errno));
 		goto done;
 	}
 
-	bzero((char *)&ifr, sizeof(ifr));
-	bcopy(ifm.ifm_name, ifr.ifr_name, sizeof(ifr.ifr_name));
+	memset((char *)&ifr, 0, sizeof(ifr));
+	memcpy(ifr.ifr_name, ifm.ifm_name, sizeof(ifr.ifr_name));
 	ifr.ifr_media =  ifm.ifm_current & ~(IFM_NMASK|IFM_TMASK|IFM_OMASK|IFM_GMASK);
 	ifr.ifr_media |= newOptions;
 
@@ -426,7 +426,7 @@ _SCNetworkInterfaceSetMTU(SCNetworkInterfaceRef	interface,
 	int		ret;
 	int		sock;
 
-	bzero((char *)&ifr, sizeof(ifr));
+	memset((char *)&ifr, 0, sizeof(ifr));
 	(void)_SC_cfstring_to_cstring(interfaceName, ifr.ifr_name, sizeof(ifr.ifr_name), kCFStringEncodingASCII);
 	ifr.ifr_mtu = requested;
 
@@ -662,16 +662,10 @@ static void
 linkConfigChangedCallback(SCDynamicStoreRef store, CFArrayRef changedKeys, void *arg)
 {
 #pragma unused(arg)
-	os_activity_t		activity;
 	CFDictionaryRef		changes;
 	CFIndex			i;
 	CFIndex			n;
 	static CFStringRef	prefix		= NULL;
-
-	activity = os_activity_create("processing link configuration changes",
-				      OS_ACTIVITY_CURRENT,
-				      OS_ACTIVITY_FLAG_DEFAULT);
-	os_activity_scope(activity);
 
 	if (prefix == NULL) {
 		prefix = SCDynamicStoreKeyCreate(NULL,
@@ -714,8 +708,6 @@ linkConfigChangedCallback(SCDynamicStoreRef store, CFArrayRef changedKeys, void 
 	if (changes != NULL) {
 		CFRelease(changes);
 	}
-
-	os_release(activity);
 
 	return;
 }
@@ -780,6 +772,7 @@ load_LinkConfiguration(CFBundleRef bundle, Boolean bundleVerbose)
 	CFArrayAppendValue(patterns, key);
 	CFRelease(key);
 
+#if	TARGET_OS_OSX
 	/* ...watch for (per-interface) FireWire configuration changes */
 	key = SCDynamicStoreKeyCreateNetworkInterfaceEntity(NULL,
 							    kSCDynamicStoreDomainSetup,
@@ -787,6 +780,7 @@ load_LinkConfiguration(CFBundleRef bundle, Boolean bundleVerbose)
 							    kSCEntNetFireWire);
 	CFArrayAppendValue(patterns, key);
 	CFRelease(key);
+#endif	// TARGET_OS_OSX
 
 	/* register the keys/patterns */
 	ok = SCDynamicStoreSetNotificationKeys(store, keys, patterns);

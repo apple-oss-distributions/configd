@@ -1,5 +1,5 @@
 /*
- * Copyright(c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright(c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -34,7 +34,6 @@
  * - initial revision
  */
 
-#include <Availability.h>
 #include <TargetConditionals.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -54,7 +53,7 @@ const AuthorizationRef	kSCPreferencesUseEntitlementAuthorization	= (Authorizatio
 
 
 __private_extern__ os_log_t
-__log_SCPreferences()
+__log_SCPreferences(void)
 {
 	static os_log_t	log	= NULL;
 
@@ -82,9 +81,10 @@ __SCPreferencesCopyDescription(CFTypeRef cf) {
 	result = CFStringCreateMutable(allocator, 0);
 	CFStringAppendFormat(result, NULL, CFSTR("<SCPreferences %p [%p]> {"), cf, allocator);
 	CFStringAppendFormat(result, NULL, CFSTR("name = %@"), prefsPrivate->name);
-	CFStringAppendFormat(result, NULL, CFSTR(", id = %@"), prefsPrivate->prefsID);
+	CFStringAppendFormat(result, NULL, CFSTR(", id = %@"),
+			     prefsPrivate->prefsID != NULL ? prefsPrivate->prefsID : CFSTR("[default]"));
 	CFStringAppendFormat(result, NULL, CFSTR(", path = %s"),
-			     prefsPrivate->newPath ? prefsPrivate->newPath : prefsPrivate->path);
+			     prefsPrivate->newPath != NULL ? prefsPrivate->newPath : prefsPrivate->path);
 	if (prefsPrivate->accessed) {
 		CFStringAppendFormat(result, NULL, CFSTR(", accessed"));
 	}
@@ -106,9 +106,14 @@ __SCPreferencesCopyDescription(CFTypeRef cf) {
 static void
 __SCPreferencesDeallocate(CFTypeRef cf)
 {
-	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)cf;
+	SCPreferencesRef	prefs		= (SCPreferencesRef)cf;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
 
 	SC_log(LOG_DEBUG, "release %@", prefsPrivate);
+
+	if (prefsPrivate->locked) {
+		__SCPreferencesUpdateLockedState(prefs, FALSE);
+	}
 
 	/* release resources */
 
@@ -454,11 +459,11 @@ __SCPreferencesCreate(CFAllocatorRef	allocator,
 				goto done;
 			}
 
-			SC_log(LOG_INFO, "open() failed: %s", strerror(errno));
+			SC_log(LOG_NOTICE, "open() failed: %s", strerror(errno));
 			sc_status = kSCStatusAccessError;
 			break;
 		default :
-			SC_log(LOG_INFO, "open() failed: %s", strerror(errno));
+			SC_log(LOG_NOTICE, "open() failed: %s", strerror(errno));
 			sc_status = kSCStatusFailed;
 			break;
 	}
@@ -499,7 +504,7 @@ __SCPreferencesAccess(SCPreferencesRef	prefs)
 		// create signature
 		if (fstat(fd, &statBuf) == -1) {
 			SC_log(LOG_NOTICE, "fstat() failed: %s", strerror(errno));
-			bzero(&statBuf, sizeof(statBuf));
+			memset(&statBuf, 0, sizeof(statBuf));
 		}
 	} else {
 		switch (errno) {
@@ -522,7 +527,7 @@ __SCPreferencesAccess(SCPreferencesRef	prefs)
 				SC_log(LOG_NOTICE, "open() failed: %s", strerror(errno));
 				break;
 		}
-		bzero(&statBuf, sizeof(statBuf));
+		memset(&statBuf, 0, sizeof(statBuf));
 	}
 
 	if (prefsPrivate->signature != NULL) CFRelease(prefsPrivate->signature);
@@ -592,8 +597,9 @@ __SCPreferencesAccess(SCPreferencesRef	prefs)
 		prefsPrivate->changed = TRUE;
 	}
 
-	SC_log(LOG_DEBUG, "SCPreferences() access: %s",
-	       prefsPrivate->newPath ? prefsPrivate->newPath : prefsPrivate->path);
+	SC_log(LOG_DEBUG, "SCPreferences() access: %s, size=%lld",
+	       prefsPrivate->newPath ? prefsPrivate->newPath : prefsPrivate->path,
+	       __SCPreferencesPrefsSize(prefs));
 
 	prefsPrivate->accessed = TRUE;
 	return;
@@ -683,7 +689,7 @@ SCPreferencesCreateWithOptions(CFAllocatorRef	allocator,
 					     data);
 			CFRelease(data);
 		}
-#endif
+#endif	// !TARGET_OS_IPHONE
 
 		/* get the application/executable/bundle name */
 		bundle = CFBundleGetMainBundle();
@@ -780,13 +786,19 @@ prefsNotify(SCDynamicStoreRef store, CFArrayRef changedKeys, void *info)
 		CFStringRef     key;
 
 		key = CFArrayGetValueAtIndex(changedKeys, i);
+
+		// check if "commit"
 		if (CFEqual(key, prefsPrivate->sessionKeyCommit)) {
 			// if preferences have been saved
 			notify |= kSCPreferencesNotificationCommit;
+			continue;
 		}
+
+		// check if "apply"
 		if (CFEqual(key, prefsPrivate->sessionKeyApply)) {
 			// if stored preferences should be applied to current configuration
 			notify |= kSCPreferencesNotificationApply;
+			continue;
 		}
 	}
 
@@ -813,7 +825,7 @@ prefsNotify(SCDynamicStoreRef store, CFArrayRef changedKeys, void *info)
 		SC_log(LOG_DEBUG, "exec SCPreferences callout: %s%s%s",
 		       ((notify & kSCPreferencesNotificationCommit) != 0) ? "commit" : "",
 		       (((notify & kSCPreferencesNotificationCommit) != 0) &&
-		        ((notify & kSCPreferencesNotificationApply ) != 0)) ? ", " : "",
+			((notify & kSCPreferencesNotificationApply ) != 0)) ? ", " : "",
 		       ((notify & kSCPreferencesNotificationApply)  != 0) ? "apply"  : "");
 		(*rlsFunction)(prefs, notify, context_info);
 	}
@@ -898,6 +910,107 @@ __SCPreferencesRemoveSession(SCPreferencesRef prefs)
 }
 
 
+static void
+appendLockedPreferences(const void *key, const void *value, void *context)
+{
+#pragma unused(key)
+	CFMutableStringRef	str	= (CFMutableStringRef)context;
+
+	CFStringAppendFormat(str, NULL, CFSTR("%s%@"),
+			     (CFStringGetLength(str) > 0) ? "\n" : "",
+			     value);
+	return;
+}
+
+
+__private_extern__ void
+__SCPreferencesUpdateLockedState(SCPreferencesRef prefs, Boolean locked)
+{
+	static dispatch_queue_t		lockedQueue;
+	static CFMutableDictionaryRef	lockedState;
+	static dispatch_once_t		once;
+	SCPreferencesPrivateRef		prefsPrivate	= (SCPreferencesPrivateRef)prefs;
+
+	dispatch_once(&once, ^{
+		os_state_block_t	state_block;
+
+		lockedQueue = dispatch_queue_create("SCPreferences locked state queue", NULL);
+
+		lockedState = CFDictionaryCreateMutable(NULL,
+							0,
+							NULL,	// NO retain/release
+							&kCFTypeDictionaryValueCallBacks);
+
+		state_block = ^os_state_data_t(os_state_hints_t hints) {
+#pragma unused(hints)
+			CFDataRef		data	= NULL;
+			Boolean			ok;
+			os_state_data_t		state_data;
+			size_t			state_data_size;
+			CFIndex			state_len;
+			CFMutableStringRef	str;
+
+			if (CFDictionaryGetCount(lockedState) == 0) {
+				// if no locked preferences
+				return NULL;
+			}
+
+			str = CFStringCreateMutable(NULL, 0);
+			CFDictionaryApplyFunction(lockedState, appendLockedPreferences, str);
+			ok = _SCSerialize(str, &data, NULL, NULL);
+			CFRelease(str);
+
+			state_len = (ok && (data != NULL)) ? CFDataGetLength(data) : 0;
+			state_data_size = OS_STATE_DATA_SIZE_NEEDED(state_len);
+			if (state_data_size > MAX_STATEDUMP_SIZE) {
+				SC_log(LOG_ERR, "locked SCPreferences : state data too large (%zd > %zd)",
+				       state_data_size,
+				       (size_t)MAX_STATEDUMP_SIZE);
+				if (data != NULL) CFRelease(data);
+				return NULL;
+			}
+
+			state_data = calloc(1, state_data_size);
+			if (state_data == NULL) {
+				SC_log(LOG_ERR, "locked SCPreferences: could not allocate state data");
+				if (data != NULL) CFRelease(data);
+				return NULL;
+			}
+
+			state_data->osd_type = OS_STATE_DATA_SERIALIZED_NSCF_OBJECT;
+			state_data->osd_data_size = (uint32_t)state_len;
+			strlcpy(state_data->osd_title, "open/locked SCPreferences", sizeof(state_data->osd_title));
+			if (state_len > 0) {
+				memcpy(state_data->osd_data, CFDataGetBytePtr(data), state_len);
+			}
+			if (data != NULL) CFRelease(data);
+
+			return state_data;
+		};
+
+		(void) os_state_add_handler(lockedQueue, state_block);
+	});
+
+	// update the locked state
+	prefsPrivate->locked = locked;
+
+	// add (or update) the locked preferences
+	dispatch_sync(lockedQueue, ^{
+		if (locked) {
+			CFStringRef	str;
+
+			str = CFCopyDescription(prefs);
+			CFDictionarySetValue(lockedState, prefs, str);
+			CFRelease(str);
+		} else {
+			CFDictionaryRemoveValue(lockedState, prefs);
+		}
+	});
+
+	return;
+}
+
+
 Boolean
 SCPreferencesSetCallback(SCPreferencesRef       prefs,
 			 SCPreferencesCallBack  callout,
@@ -924,7 +1037,7 @@ SCPreferencesSetCallback(SCPreferencesRef       prefs,
 	prefsPrivate->rlsContext.release		= NULL;
 	prefsPrivate->rlsContext.copyDescription	= NULL;
 	if (context != NULL) {
-		bcopy(context, &prefsPrivate->rlsContext, sizeof(SCPreferencesContext));
+		memcpy(&prefsPrivate->rlsContext, context, sizeof(SCPreferencesContext));
 		if (context->retain != NULL) {
 			prefsPrivate->rlsContext.info = (void *)(*context->retain)(context->info);
 		}

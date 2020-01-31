@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -54,14 +54,13 @@
  */
 
 #include "eventmon.h"
-#include "cache.h"
 #include "ev_dlil.h"
 #include "ev_ipv4.h"
 #include "ev_ipv6.h"
 #include <notify.h>
 #include <sys/sysctl.h>
 #include <sys/kern_event.h>
-#include <network/config.h>
+#include <nw/private.h>
 #include <netinet6/nd6.h>
 
 static dispatch_queue_t			S_kev_queue;
@@ -72,7 +71,7 @@ __private_extern__ Boolean		_verbose		= FALSE;
 
 
 __private_extern__ os_log_t
-__log_KernelEventMonitor()
+__log_KernelEventMonitor(void)
 {
     static os_log_t	log	= NULL;
 
@@ -177,58 +176,6 @@ dgram_socket(int domain)
     }
 
     return s;
-}
-
-static int
-ifflags_set(int s, char * name, short flags)
-{
-    struct ifreq	ifr;
-    int 		ret;
-
-    bzero(&ifr, sizeof(ifr));
-    strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
-    ret = ioctl(s, SIOCGIFFLAGS, (caddr_t)&ifr);
-    if (ret == -1) {
-		return (ret);
-    }
-    ifr.ifr_flags |= flags;
-    return (ioctl(s, SIOCSIFFLAGS, &ifr));
-}
-
-static int
-ifflags_clear(int s, char * name, short flags)
-{
-    struct ifreq	ifr;
-    int 		ret;
-
-    bzero(&ifr, sizeof(ifr));
-    strlcpy(ifr.ifr_name, name, sizeof(ifr.ifr_name));
-    ret = ioctl(s, SIOCGIFFLAGS, (caddr_t)&ifr);
-    if (ret == -1) {
-		return (ret);
-    }
-    ifr.ifr_flags &= ~flags;
-    return (ioctl(s, SIOCSIFFLAGS, &ifr));
-}
-
-static void
-mark_if_up(char * name)
-{
-	int s = dgram_socket(AF_INET);
-	if (s == -1)
-		return;
-	ifflags_set(s, name, IFF_UP);
-	close(s);
-}
-
-static void
-mark_if_down(char * name)
-{
-	int s = dgram_socket(AF_INET);
-	if (s == -1)
-		return;
-	ifflags_clear(s, name, IFF_UP);
-	close(s);
 }
 
 static void
@@ -481,11 +428,6 @@ processEvent_Apple_Network(struct kern_event_msg *ev_msg)
 						 (char *)ifr_name,
 						 protoEvent->proto_family,
 						 protoEvent->proto_remaining_count);
-					if (protoEvent->proto_remaining_count == 0) {
-						mark_if_down(ifr_name);
-					} else {
-						mark_if_up(ifr_name);
-					}
 					break;
 				}
 
@@ -504,6 +446,20 @@ processEvent_Apple_Network(struct kern_event_msg *ev_msg)
 					break;
 				}
 #endif	// KEV_DL_IF_IDLE_ROUTE_REFCNT
+
+				case KEV_DL_IFDELEGATE_CHANGED: {
+					/*
+					 * interface delegation changed
+					 */
+					if (dataLen < sizeof(*ev)) {
+						handled = FALSE;
+						break;
+					}
+					copy_if_name(ev, ifr_name, sizeof(ifr_name));
+					SC_log(LOG_INFO, "Process interface delegation change: %s", (char *)ifr_name);
+					interface_update_delegation(ifr_name);
+					break;
+				}
 
 				case KEV_DL_LINK_OFF :
 				case KEV_DL_LINK_ON :
@@ -538,7 +494,7 @@ processEvent_Apple_Network(struct kern_event_msg *ev_msg)
 								   lqm_data->link_quality_metric);
 					break;
 				}
-#endif  // KEV_DL_LINK_QUALITY_METRIC_CHANGED
+#endif	// KEV_DL_LINK_QUALITY_METRIC_CHANGED
 
 #ifdef	KEV_DL_ISSUES
 				case KEV_DL_ISSUES: {
@@ -666,7 +622,7 @@ eventCallback(int so)
 		return FALSE;
 	}
 
-	cache_open();
+	_SCDynamicStoreCacheOpen(store);
 
 	while (offset < status) {
 		if ((offset + (ssize_t)ev_msg->total_size) > status) {
@@ -692,8 +648,8 @@ eventCallback(int so)
 		ev_msg = (struct kern_event_msg *)(void *)&buf.bytes[offset];
 	}
 
-	cache_write(store);
-	cache_close();
+	_SCDynamicStoreCacheCommitChanges(store);
+	_SCDynamicStoreCacheClose(store);
 	post_network_changed();
 	messages_post();
 
@@ -797,10 +753,10 @@ check_for_new_interfaces(void * context)
 
 	/* update KEV driven content in case a message got dropped */
 	snprintf(msg, sizeof(msg), "update %d (of %d)", count, MAX_TIMER_COUNT);
-	cache_open();
+	_SCDynamicStoreCacheOpen(store);
 	update_interfaces(msg, FALSE);
-	cache_write(store);
-	cache_close();
+	_SCDynamicStoreCacheCommitChanges(store);
+	_SCDynamicStoreCacheClose(store);
 	messages_post();
 
 	/* schedule the next timer, if needed */
@@ -819,11 +775,11 @@ prime(void)
 {
 	SC_log(LOG_DEBUG, "prime() called");
 
-	cache_open();
+	_SCDynamicStoreCacheOpen(store);
 	messages_init();
 	update_interfaces("prime", TRUE);
-	cache_write(store);
-	cache_close();
+	_SCDynamicStoreCacheCommitChanges(store);
+	_SCDynamicStoreCacheClose(store);
 
 	network_changed = TRUE;
 	post_network_changed();
@@ -923,21 +879,13 @@ load_KernelEventMonitor(CFBundleRef bundle, Boolean bundleVerbose)
 		close(so);
 	});
 	dispatch_source_set_event_handler(S_kev_source, ^{
-		os_activity_t	activity;
 		Boolean		ok;
-
-		activity = os_activity_create("processing network kernel events",
-					      OS_ACTIVITY_CURRENT,
-					      OS_ACTIVITY_FLAG_DEFAULT);
-		os_activity_scope(activity);
 
 		ok = eventCallback(so);
 		if (!ok) {
 			SC_log(LOG_ERR, "kernel event monitor disabled");
 			dispatch_source_cancel(S_kev_source);
 		}
-
-		os_release(activity);
 	});
 	// NOTE: dispatch_resume() will be called in prime()
 

@@ -17,16 +17,20 @@
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.17</string>
+	<string>1.19</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>1.17</string>
+	<string>1.19</string>
 	<key>QoSMarking_AppleAudioVideoCalls_BundleIDs</key>
 	<array>
 		<string>com.apple.datausage.telephony.ims</string>
 		<string>com.apple.facetime</string>
 		<string>com.apple.siri</string>
+	</array>
+	<key>QoSMarking_AppleAudioVideoCalls_ExecutablePaths</key>
+	<array>
+		<string>/System/Library/PrivateFrameworks/IDS.framework/identityservicesd.app/Contents/MacOS/identityservicesd</string>
 	</array>
 	<key>Requires</key>
 	<array>

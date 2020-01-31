@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013, 2016, 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2013, 2016-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -85,6 +85,8 @@ typedef uint32_t        Rank;
 
 typedef int32_t		nwi_ifindex_t;
 
+#define NWI_SIGNATURE_LENGTH	20
+
 #pragma pack(4)
 typedef struct _nwi_ifstate {
 	char			ifname[IFNAMSIZ];
@@ -102,7 +104,7 @@ typedef struct _nwi_ifstate {
 	    struct sockaddr_in	vpn_server_address4;
 	    struct sockaddr_in6	vpn_server_address6;
 	} vpn_server_address;
-	unsigned char		signature[CC_SHA1_DIGEST_LENGTH];
+	unsigned char		signature[NWI_SIGNATURE_LENGTH];
 } nwi_ifstate;
 #pragma pack()
 
@@ -278,8 +280,7 @@ _nwi_ifstate_set_vpn_server(nwi_ifstate_t ifstate, struct sockaddr *serv_addr)
 	size_t len;
 
 	if (serv_addr == NULL) {
-		bzero(&ifstate->vpn_server_address,
-		      sizeof(ifstate->vpn_server_address));
+		memset(&ifstate->vpn_server_address, 0, sizeof(ifstate->vpn_server_address));
 		return;
 	}
 
@@ -348,10 +349,7 @@ void
 _nwi_state_update_interface_generations(nwi_state_t old_state, nwi_state_t state, nwi_state_t changes);
 
 void
-_nwi_state_force_refresh();
+_nwi_state_compute_sha256_hash(nwi_state_t state,
+			       unsigned char hash[CC_SHA256_DIGEST_LENGTH]);
 
-void
-_nwi_state_compute_sha1_hash(nwi_state_t state,
-			     unsigned char hash[CC_SHA1_DIGEST_LENGTH]);
-
-#endif // _NETWORK_STATE_INFORMATION_PRIV_H_
+#endif	// _NETWORK_STATE_INFORMATION_PRIV_H_

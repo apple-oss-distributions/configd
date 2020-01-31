@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -35,7 +35,6 @@
 //#define DEBUG_MACH_PORT_ALLOCATIONS
 
 
-#include <Availability.h>
 #include <TargetConditionals.h>
 #include <sys/cdefs.h>
 #include <dispatch/dispatch.h>
@@ -137,15 +136,15 @@ typedef struct {
 	/* Flow Divert support info */
 	CFDictionaryRef			flow_divert_token_params;
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	/* NetworkExtension data structures */
 	ne_session_t			ne_session;
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 } SCNetworkConnectionPrivate, *SCNetworkConnectionPrivateRef;
 
 
 __private_extern__ os_log_t
-__log_SCNetworkConnection()
+__log_SCNetworkConnection(void)
 {
 	static os_log_t	log	= NULL;
 
@@ -164,8 +163,8 @@ isA_SCNetworkConnection(CFTypeRef obj)
 }
 
 
-#if !TARGET_OS_SIMULATOR
-Boolean
+#if	!TARGET_OS_SIMULATOR
+static Boolean
 __SCNetworkConnectionUseNetworkExtension(SCNetworkConnectionPrivateRef connectionPrivate)
 {
 	Boolean result = FALSE;
@@ -213,18 +212,18 @@ __SCNetworkConnectionUseNetworkExtension(SCNetworkConnectionPrivateRef connectio
 
 	return result;
 }
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
 
-Boolean
+static Boolean
 __SCNetworkConnectionUsingNetworkExtension(SCNetworkConnectionPrivateRef connectionPrivate)
 {
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
     return (connectionPrivate->ne_session != NULL);
 #else
 #pragma unused(connectionPrivate)
 	return FALSE;
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 }
 
 
@@ -257,17 +256,13 @@ __SCNetworkConnectionDeallocate(CFTypeRef cf)
 	pthread_mutex_destroy(&connectionPrivate->lock);
 
 	if (connectionPrivate->client_audit_session != MACH_PORT_NULL) {
-		mach_port_mod_refs(mach_task_self(),
-				   connectionPrivate->client_audit_session,
-				   MACH_PORT_RIGHT_SEND,
-				   -1);
+		mach_port_deallocate(mach_task_self(),
+				     connectionPrivate->client_audit_session);
 	}
 
 	if (connectionPrivate->client_bootstrap_port != MACH_PORT_NULL) {
-		mach_port_mod_refs(mach_task_self(),
-				   connectionPrivate->client_bootstrap_port,
-				   MACH_PORT_RIGHT_SEND,
-				   -1);
+		mach_port_deallocate(mach_task_self(),
+				     connectionPrivate->client_bootstrap_port);
 	}
 
 	if (connectionPrivate->client_bundle_id != NULL) {
@@ -320,12 +315,12 @@ __SCNetworkConnectionDeallocate(CFTypeRef cf)
 		CFRelease(connectionPrivate->flow_divert_token_params);
 	}
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (connectionPrivate->ne_session != NULL) {
 		ne_session_set_event_handler(connectionPrivate->ne_session, NULL, NULL);
 		ne_session_release(connectionPrivate->ne_session);
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
 	return;
 }
@@ -407,24 +402,11 @@ __SCNetworkConnectionNotify(SCNetworkConnectionRef	connection,
 			    void			(*context_release)(const void *),
 			    void			*context_info)
 {
-#ifdef	VERBOSE_ACTIVITY_LOGGING
-	os_activity_t	activity;
-
-	activity = os_activity_create("processing SCNetworkConnection notification",
-				      OS_ACTIVITY_CURRENT,
-				      OS_ACTIVITY_FLAG_DEFAULT);
-	os_activity_scope(activity);
-#endif	// VERBOSE_ACTIVITY_LOGGING
-
 	SC_log(LOG_DEBUG, "exec SCNetworkConnection callout");
 	(*rlsFunction)(connection, nc_status, context_info);
 	if ((context_release != NULL) && (context_info != NULL)) {
 		(*context_release)(context_info);
 	}
-
-#ifdef	VERBOSE_ACTIVITY_LOGGING
-	os_release(activity);
-#endif	// VERBOSE_ACTIVITY_LOGGING
 
 	return;
 }
@@ -502,7 +484,7 @@ __SCNetworkConnectionCallBack(void *connection)
 		context_release	= NULL;
 	}
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		pthread_mutex_unlock(&connectionPrivate->lock);
 
@@ -511,7 +493,7 @@ __SCNetworkConnectionCallBack(void *connection)
 		CFRelease(connection); /* This releases the reference that we took in the NESessionEventStatusChanged event handler */
 		return;
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
 	// Do we need to spin a new thread? (either we are running on the main
 	// dispatch queue or main runloop)
@@ -637,14 +619,14 @@ __SCNetworkConnectionCreatePrivate(CFAllocatorRef		allocator,
 	connectionPrivate->client_pid = getpid();
 	connectionPrivate->rlsFunction = callout;
 	if (context) {
-		bcopy(context, &connectionPrivate->rlsContext, sizeof(SCNetworkConnectionContext));
+		memcpy(&connectionPrivate->rlsContext, context, sizeof(SCNetworkConnectionContext));
 		if (context->retain != NULL) {
 			connectionPrivate->rlsContext.info = (void *)(*context->retain)(context->info);
 		}
 	}
 	connectionPrivate->type = kSCNetworkConnectionTypeUnknown;
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUseNetworkExtension(connectionPrivate)) {
 		CFStringRef serviceID = SCNetworkServiceGetServiceID(connectionPrivate->service);
 		if (serviceID != NULL) {
@@ -664,7 +646,7 @@ __SCNetworkConnectionCreatePrivate(CFAllocatorRef		allocator,
 			goto fail;
 		}
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
 	/* success, return the connection reference */
 	return connectionPrivate;
@@ -1337,10 +1319,8 @@ SCNetworkConnectionSetClientInfo(SCNetworkConnectionRef	connection,
 
 	// save client audit session port
 	if (connectionPrivate->client_audit_session != MACH_PORT_NULL) {
-		mach_port_mod_refs(mach_task_self(),
-				   connectionPrivate->client_audit_session,
-				   MACH_PORT_RIGHT_SEND,
-				   -1);
+		mach_port_deallocate(mach_task_self(),
+				     connectionPrivate->client_audit_session);
 		connectionPrivate->client_audit_session = MACH_PORT_NULL;
 	}
 	connectionPrivate->client_audit_session = client_audit_session;
@@ -1348,7 +1328,7 @@ SCNetworkConnectionSetClientInfo(SCNetworkConnectionRef	connection,
 		mach_port_mod_refs(mach_task_self(),
 				   connectionPrivate->client_audit_session,
 				   MACH_PORT_RIGHT_SEND,
-				   1);
+				   +1);
 	}
 
 	// save client UID, GID, and PID
@@ -1392,10 +1372,8 @@ SCNetworkConnectionSetClientAuditInfo(SCNetworkConnectionRef	connection,
 	}
 
 	if (connectionPrivate->client_bootstrap_port != MACH_PORT_NULL) {
-		mach_port_mod_refs(mach_task_self(),
-				   connectionPrivate->client_bootstrap_port,
-				   MACH_PORT_RIGHT_SEND,
-				   -1);
+		mach_port_deallocate(mach_task_self(),
+				     connectionPrivate->client_bootstrap_port);
 		connectionPrivate->client_bootstrap_port = MACH_PORT_NULL;
 	}
 
@@ -1404,7 +1382,7 @@ SCNetworkConnectionSetClientAuditInfo(SCNetworkConnectionRef	connection,
 		mach_port_mod_refs(mach_task_self(),
 				   connectionPrivate->client_bootstrap_port,
 				   MACH_PORT_RIGHT_SEND,
-				   1);
+				   +1);
 	}
 
 	memcpy(&connectionPrivate->client_audit_token, &client_audit_token, sizeof(connectionPrivate->client_audit_token));
@@ -1444,7 +1422,7 @@ SCNetworkConnectionCopyStatistics(SCNetworkConnectionRef connection)
 
 	pthread_mutex_lock(&connectionPrivate->lock);
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		__block xpc_object_t xstats = NULL;
 		ne_session_t ne_session = connectionPrivate->ne_session;
@@ -1472,7 +1450,7 @@ SCNetworkConnectionCopyStatistics(SCNetworkConnectionRef connection)
 
 		return statistics;
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
     retry :
 
@@ -1557,7 +1535,7 @@ SCNetworkConnectionGetStatus(SCNetworkConnectionRef connection)
 
 	pthread_mutex_lock(&connectionPrivate->lock);
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		__block ne_session_status_t ne_status;
 		ne_session_t ne_session = connectionPrivate->ne_session;
@@ -1576,7 +1554,7 @@ SCNetworkConnectionGetStatus(SCNetworkConnectionRef connection)
 
 		return SCNetworkConnectionGetStatusFromNEStatus(ne_status);
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
     retry :
 
@@ -1648,7 +1626,7 @@ SCNetworkConnectionCopyExtendedStatus(SCNetworkConnectionRef connection)
 
 	pthread_mutex_lock(&connectionPrivate->lock);
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		__block CFDictionaryRef statusDictionary = NULL;
 		ne_session_t ne_session = connectionPrivate->ne_session;
@@ -1848,7 +1826,7 @@ SCNetworkConnectionStart(SCNetworkConnectionRef	connection,
 	    connectionPrivate->flow_divert_token_params = NULL;
 	}
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		xpc_object_t xuser_options = NULL;
 
@@ -1857,7 +1835,7 @@ SCNetworkConnectionStart(SCNetworkConnectionRef	connection,
 		}
 
 		if (connectionPrivate->client_bootstrap_port != MACH_PORT_NULL) {
-#if NE_SESSION_VERSION > 2
+#if	NE_SESSION_VERSION > 2
 			ne_session_start_on_behalf_of(connectionPrivate->ne_session,
 						      xuser_options,
 						      connectionPrivate->client_bootstrap_port,
@@ -1887,7 +1865,7 @@ SCNetworkConnectionStart(SCNetworkConnectionRef	connection,
 		ok = TRUE;
 		goto done;
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
 	if (userOptions && !_SCSerialize(userOptions, &dataref, &data, &datalen)) {
 		goto done;
@@ -1954,7 +1932,7 @@ SCNetworkConnectionStop(SCNetworkConnectionRef	connection,
 
 	pthread_mutex_lock(&connectionPrivate->lock);
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		ne_session_stop(connectionPrivate->ne_session);
 		/* make sure the xpc_message goes through */
@@ -1962,7 +1940,7 @@ SCNetworkConnectionStop(SCNetworkConnectionRef	connection,
 		ok = TRUE;
 		goto done;
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
     retry :
 
@@ -2018,13 +1996,13 @@ SCNetworkConnectionSuspend(SCNetworkConnectionRef connection)
 
 	pthread_mutex_lock(&connectionPrivate->lock);
 
-#if !!TARGET_OS_SIMULATOR
+#if	!!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		/* Suspend only applies to PPPSerial and PPPoE */
 		ok = TRUE;
 		goto done;
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
     retry :
 
@@ -2080,13 +2058,13 @@ SCNetworkConnectionResume(SCNetworkConnectionRef connection)
 
 	pthread_mutex_lock(&connectionPrivate->lock);
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		/* Resume only applies to PPPSerial and PPPoE */
 		ok = TRUE;
 		goto done;
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
     retry :
 
@@ -2124,75 +2102,9 @@ SCNetworkConnectionResume(SCNetworkConnectionRef connection)
 
 #if	!TARGET_OS_SIMULATOR
 Boolean
-SCNetworkConnectionRefreshOnDemandState(SCNetworkConnectionRef connection)
+SCNetworkConnectionRefreshOnDemandState(__unused SCNetworkConnectionRef connection)
 {
-	SCNetworkConnectionPrivateRef	connectionPrivate	= (SCNetworkConnectionPrivateRef)connection;
-	Boolean				ok			= FALSE;
-	uint32_t			retry			= 0;
-	int				sc_status		= kSCStatusFailed;
-	mach_port_t			server_port		= __SCNetworkConnectionGetCurrentServerPort();
-	kern_return_t			status			= KERN_SUCCESS;
-
-	if (!isA_SCNetworkConnection(connection)) {
-		_SCErrorSet(kSCStatusInvalidArgument);
-		return FALSE;
-	}
-
-	if (debug > 0) {
-		SC_log(LOG_INFO, "SCNetworkConnectionRefreshOnDemandState (%p)", connectionPrivate);
-	}
-
-	pthread_mutex_lock(&connectionPrivate->lock);
-
-	while (TRUE) {
-		if (server_port == MACH_PORT_NULL) {
-			server_port = __SCNetworkConnectionRefreshServerPort(server_port, &sc_status);
-			if (server_port == MACH_PORT_NULL) {
-				// if server not available
-				if (sc_status == BOOTSTRAP_UNKNOWN_SERVICE) {
-					// wait up to 2.5 seconds for the [SCNetworkConnection] server
-					// to startup
-					if ((retry += 50) < 2500) {
-						usleep(50 * 1000);	// sleep 50ms between attempts
-						continue;
-					}
-				}
-				break;
-			}
-		}
-
-		status = pppcontroller_ondemand_refresh_state(server_port, &sc_status);
-		if (status == KERN_SUCCESS)
-			break;
-
-		if (status == MACH_SEND_INVALID_DEST) {
-			// the server is not yet available
-			SC_log(LOG_NOTICE, "SCNetworkConnectionRefreshOnDemandState (!dest) (%p)", connectionPrivate);
-		} else if (status == MIG_SERVER_DIED) {
-			// the server we were using is gone
-			SC_log(LOG_NOTICE, "SCNetworkConnectionRefreshOnDemandState (!mig) (%p)", connectionPrivate);
-		} else {
-			// if we got an unexpected error, don't retry
-			sc_status = status;
-			break;
-		}
-	}
-
-	if (debug > 0) {
-		SC_log(LOG_INFO, "SCNetworkConnectionRefreshOnDemandState (%p), return: %d/%d", connectionPrivate, status, sc_status);
-	}
-
-	if (sc_status != kSCStatusOK) {
-		_SCErrorSet(sc_status);
-		goto done;
-	}
-
-	ok = TRUE;
-
-    done :
-
-	pthread_mutex_unlock(&connectionPrivate->lock);
-	return ok;
+	return FALSE;
 }
 #endif	/* !TARGET_OS_SIMULATOR */
 
@@ -2215,7 +2127,7 @@ SCNetworkConnectionCopyUserOptions(SCNetworkConnectionRef connection)
 
 	pthread_mutex_lock(&connectionPrivate->lock);
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		__block xpc_object_t config = NULL;
 		ne_session_t ne_session = connectionPrivate->ne_session;
@@ -2243,7 +2155,7 @@ SCNetworkConnectionCopyUserOptions(SCNetworkConnectionRef connection)
 		}
 		return userOptions;
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
     retry :
 
@@ -2462,7 +2374,7 @@ __SCNetworkConnectionScheduleWithRunLoop(SCNetworkConnectionRef	connection,
 		_SC_schedule(connection, runLoop, runLoopMode, connectionPrivate->rlList);
 	}
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
 		CFRetain(connection);
 		ne_session_set_event_handler(connectionPrivate->ne_session, __SCNetworkConnectionQueue(), ^(ne_session_event_t event, void *event_data) {
@@ -2484,7 +2396,7 @@ __SCNetworkConnectionScheduleWithRunLoop(SCNetworkConnectionRef	connection,
 			}
 		});
 	}
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
 	ok = TRUE;
 
@@ -2575,9 +2487,9 @@ __SCNetworkConnectionUnscheduleFromRunLoop(SCNetworkConnectionRef	connection,
 		connectionPrivate->scheduled = FALSE;
 
 		if (__SCNetworkConnectionUsingNetworkExtension(connectionPrivate)) {
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 			ne_session_cancel(connectionPrivate->ne_session);
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 		} else {
 			mach_port_t session_port = __SCNetworkConnectionSessionPort(connectionPrivate);
 			if (session_port == MACH_PORT_NULL) {
@@ -2703,7 +2615,7 @@ SCNetworkConnectionTriggerOnDemandIfNeeded	(CFStringRef			hostName,
 						 int				timeout,
 						 int				trafficClass)
 {
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 	__block Boolean triggeredOnDemand = FALSE;
 	struct proc_uniqidentifierinfo procu;
 	void *policy_match = NULL;
@@ -2746,13 +2658,6 @@ SCNetworkConnectionTriggerOnDemandIfNeeded	(CFStringRef			hostName,
 								ne_session_set_event_handler(new_session, __SCNetworkConnectionQueue(),
 									^(ne_session_event_t event, void *event_data) {
 #pragma unused(event_data)
-										os_activity_t	activity;
-
-										activity = os_activity_create("processing ne_session notification",
-													      OS_ACTIVITY_CURRENT,
-													      OS_ACTIVITY_FLAG_DEFAULT);
-										os_activity_scope(activity);
-
 										if (event == NESessionEventStatusChanged) {
 											dispatch_retain(wait_for_session);
 											ne_session_get_status(new_session, __SCNetworkConnectionQueue(),
@@ -2769,8 +2674,6 @@ SCNetworkConnectionTriggerOnDemandIfNeeded	(CFStringRef			hostName,
 											dispatch_semaphore_signal(wait_for_session);
 											dispatch_release(wait_for_session);
 										}
-
-										os_release(activity);
 									});
 								ne_session_start_with_options(new_session, start_options);
 							} else {
@@ -2955,7 +2858,7 @@ SCNetworkConnectionGetServiceIdentifier	(SCNetworkConnectionRef	connection)
 }
 
 
-#if !TARGET_OS_SIMULATOR
+#if	!TARGET_OS_SIMULATOR
 SCNetworkConnectionStatus
 SCNetworkConnectionGetStatusFromNEStatus(ne_session_status_t status)
 {
@@ -2975,7 +2878,7 @@ SCNetworkConnectionGetStatusFromNEStatus(ne_session_status_t status)
 
 	return kSCNetworkConnectionInvalid;
 }
-#endif /* !TARGET_OS_SIMULATOR */
+#endif	/* !TARGET_OS_SIMULATOR */
 
 
 #pragma mark -
@@ -3575,70 +3478,6 @@ __SCNetworkConnectionCopyTriggerWithService(CFDictionaryRef	configuration,
 }
 
 
-__private_extern__ CFDictionaryRef
-__SCNetworkConnectionCopyTokenParameters(SCNetworkConnectionRef connection)
-{
-	SCNetworkConnectionPrivateRef	connectionPrivate	= (SCNetworkConnectionPrivateRef)connection;
-	CFDictionaryRef			parameters		= NULL;
-	uint8_t     			params_buffer[PPP_MACH_MAX_INLINE_DATA];
-	uint32_t    			params_buffer_len	= sizeof(params_buffer);
-	int				sc_status		= kSCStatusOK;
-	mach_port_t			session_port;
-	kern_return_t			status;
-
-	pthread_mutex_lock(&connectionPrivate->lock);
-
-	parameters = connectionPrivate->flow_divert_token_params;
-	if (parameters != NULL) {
-	    CFRetain(parameters);
-	    goto done;
-	}
-
-retry:
-	if (parameters != NULL) {
-		CFRelease(parameters);
-		parameters = NULL;
-	}
-
-	session_port = __SCNetworkConnectionSessionPort(connectionPrivate);
-	if (session_port == MACH_PORT_NULL) {
-		goto done;
-	}
-
-	status = pppcontroller_flow_divert_copy_token_parameters(session_port, params_buffer, &params_buffer_len);
-	if (status == KERN_SUCCESS) {
-		if (params_buffer_len > 0) {
-			CFDataRef params_data = CFDataCreateWithBytesNoCopy(kCFAllocatorDefault,
-									    params_buffer,
-									    params_buffer_len,
-									    kCFAllocatorNull);
-			parameters = CFPropertyListCreateWithData(kCFAllocatorDefault,
-								  params_data,
-								  kCFPropertyListImmutable,
-								  NULL,
-								  NULL);
-			CFRelease(params_data);
-		}
-	}
-
-	if (__SCNetworkConnectionNeedsRetry(connection, "__SCNetworkConnectionCopyTokenParameters()", status, &sc_status)) {
-		goto retry;
-	}
-
-	if (sc_status != kSCStatusOK) {
-		_SCErrorSet(sc_status);
-	}
-
-done:
-	if (parameters != NULL && connectionPrivate->flow_divert_token_params == NULL) {
-	    connectionPrivate->flow_divert_token_params = (CFDictionaryRef)CFRetain(parameters);
-	}
-
-	pthread_mutex_unlock(&connectionPrivate->lock);
-
-	return parameters;
-}
-
 Boolean
 __SCNetworkConnectionCopyOnDemandInfoWithName(SCDynamicStoreRef		*storeP,
 					      CFStringRef		hostName,
@@ -4055,7 +3894,7 @@ SCNetworkConnectionOnDemandShouldRetryOnFailure (SCNetworkConnectionRef connecti
 
 
 // Mask is optional in routes dictionary; if not present, whole addresses are matched
-Boolean
+static Boolean
 __SCNetworkConnectionIPv4AddressMatchesRoutes (struct sockaddr_in *addr_in, CFDictionaryRef routes)
 {
 	CFIndex		count;
@@ -4104,7 +3943,7 @@ __SCNetworkConnectionIPv4AddressMatchesRoutes (struct sockaddr_in *addr_in, CFDi
 }
 
 
-void
+static void
 __SCNetworkConnectionMaskIPv6Address(struct in6_addr *addr, struct in6_addr *mask)
 {
 	for (size_t i = 0; i < sizeof(struct in6_addr); i++)
@@ -4113,7 +3952,7 @@ __SCNetworkConnectionMaskIPv6Address(struct in6_addr *addr, struct in6_addr *mas
 
 
 // Mask is optional in routes dictionary; if not present, whole addresses are matched
-Boolean
+static Boolean
 __SCNetworkConnectionIPv6AddressMatchesRoutes (struct sockaddr_in6 *addr_in6, CFDictionaryRef routes)
 {
 	CFIndex		count;

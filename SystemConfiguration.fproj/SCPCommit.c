@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008, 2010-2013, 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008, 2010-2013, 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -197,14 +197,12 @@ SCPreferencesCommitChanges(SCPreferencesRef prefs)
 		int		fd;
 		CFDataRef	newPrefs;
 		CFIndex		pathLen;
-#if	TARGET_OS_EMBEDDED
 		CFStringRef	protectionClass;
-#endif	// TARGET_OS_EMBEDDED
 		char *		thePath;
 
 		if (stat(prefsPrivate->path, &statBuf) == -1) {
 			if (errno == ENOENT) {
-				bzero(&statBuf, sizeof(statBuf));
+				memset(&statBuf, 0, sizeof(statBuf));
 				statBuf.st_mode = 0644;
 				statBuf.st_uid  = geteuid();
 				statBuf.st_gid  = getegid();
@@ -220,7 +218,6 @@ SCPreferencesCommitChanges(SCPreferencesRef prefs)
 		thePath = CFAllocatorAllocate(NULL, pathLen, 0);
 		snprintf(thePath, pathLen, "%s-new", path);
 
-#if	TARGET_OS_EMBEDDED
 		if ((prefsPrivate->options != NULL) &&
 		    CFDictionaryGetValueIfPresent(prefsPrivate->options,
 						  kSCPreferencesOptionProtectionClass,
@@ -239,13 +236,13 @@ SCPreferencesCommitChanges(SCPreferencesRef prefs)
 
 			pc = str[0] - 'A' + 1;	// PROTECTION_CLASS_[ABCDEF]
 			fd = open_dprotected_np(thePath, O_WRONLY|O_CREAT, pc, 0, statBuf.st_mode);
-		} else
-#endif	// TARGET_OS_EMBEDDED
-		fd = open(thePath, O_WRONLY|O_CREAT, statBuf.st_mode);
+		} else {
+			fd = open(thePath, O_WRONLY|O_CREAT, statBuf.st_mode);
+		}
 
 		if (fd == -1) {
 			_SCErrorSet(errno);
-			SC_log(LOG_INFO, "open() failed: %s", strerror(errno));
+			SC_log(LOG_NOTICE, "open() failed: %s", strerror(errno));
 			CFAllocatorDeallocate(NULL, thePath);
 			goto done;
 		}
@@ -326,7 +323,7 @@ SCPreferencesCommitChanges(SCPreferencesRef prefs)
 		unlink(path);
 
 		/* init the new signature */
-		bzero(&statBuf, sizeof(statBuf));
+		memset(&statBuf, 0, sizeof(statBuf));
 	}
 
 	/* update signature */
@@ -335,8 +332,9 @@ SCPreferencesCommitChanges(SCPreferencesRef prefs)
 
     committed :
 
-	SC_log(LOG_INFO, "SCPreferences() commit: %s",
-	       prefsPrivate->newPath ? prefsPrivate->newPath : prefsPrivate->path);
+	SC_log(LOG_INFO, "SCPreferences() commit: %s, size=%lld",
+	       prefsPrivate->newPath ? prefsPrivate->newPath : prefsPrivate->path,
+	       __SCPreferencesPrefsSize(prefs));
 
 	/* post notification */
 	ok = SCDynamicStoreNotifyValue(NULL, prefsPrivate->sessionKeyCommit);

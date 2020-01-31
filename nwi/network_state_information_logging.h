@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017, 2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -24,7 +24,7 @@
 #ifndef _NETWORK_STATE_INFORMATION_LOGGING_H
 #define _NETWORK_STATE_INFORMATION_LOGGING_H
 
-#include <Availability.h>
+#include <os/availability.h>
 #include <TargetConditionals.h>
 #include <sys/cdefs.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -93,6 +93,12 @@ _nwi_ifstate_flags_str(nwi_ifstate_flags flags, char *str, size_t len)
 	    (n < len) && ((len - n) > sizeof("DNS,"))) {
 		n = strlcat(str, "DNS,", len);
 		remaining &= ~NWI_IFSTATE_FLAGS_HAS_DNS;
+	}
+
+	if ((remaining & NWI_IFSTATE_FLAGS_HAS_CLAT46) &&
+	    (n < len) && ((len - n) > sizeof("CLAT46,"))) {
+		n = strlcat(str, "CLAT46,", len);
+		remaining &= ~NWI_IFSTATE_FLAGS_HAS_CLAT46;
 	}
 
 	if ((remaining & NWI_IFSTATE_FLAGS_NOT_IN_LIST) &&
@@ -226,7 +232,7 @@ _nwi_ifstate_log(nwi_ifstate_t ifstate, boolean_t debug, my_log_context_type my_
 		uint32_t	rank_index;
 		const char	*rank_str;
 		const uint8_t	*signature;
-		int		signature_length;
+		int		signature_length	= 0;
 
 		// Rank
 		rank = ifstate->rank;
@@ -243,7 +249,7 @@ _nwi_ifstate_log(nwi_ifstate_t ifstate, boolean_t debug, my_log_context_type my_
 		if (signature != NULL) {
 			CFDataRef	digest;
 
-			digest = CFDataCreate(NULL, signature, CC_SHA1_DIGEST_LENGTH);
+			digest = CFDataCreate(NULL, signature, signature_length);
 			my_log(LOG_INFO, "           signature  : %@", digest);
 			CFRelease(digest);
 		}
@@ -393,4 +399,4 @@ _nwi_state_log(nwi_state_t state, boolean_t debug, my_log_context_type my_log_co
 
 __END_DECLS
 
-#endif // _NETWORK_STATE_INFORMATION_LOGGING_H
+#endif	// _NETWORK_STATE_INFORMATION_LOGGING_H

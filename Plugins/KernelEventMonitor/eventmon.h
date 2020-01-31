@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -64,17 +64,17 @@ extern Boolean			_verbose;
 __BEGIN_DECLS
 
 os_log_t
-__log_KernelEventMonitor		();
+__log_KernelEventMonitor	(void);
 
 int
-dgram_socket			(int	domain);
+dgram_socket			(int		domain);
 
 void
 messages_add_msg_with_arg	(const char	*msg,
 				 const char	*arg);
 
 void
-config_new_interface(const char * ifname);
+config_new_interface		(const char	*ifname);
 
 __END_DECLS
 

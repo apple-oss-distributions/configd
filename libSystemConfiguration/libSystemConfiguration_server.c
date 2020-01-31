@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -21,7 +21,6 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#include <Availability.h>
 #include <TargetConditionals.h>
 #include <dispatch/dispatch.h>
 #include <vproc.h>
@@ -37,7 +36,7 @@
 
 #ifdef	SC_LOG_HANDLE
 #include <os/log.h>
-os_log_t	SC_LOG_HANDLE;
+os_log_t	SC_LOG_HANDLE(void);
 #endif	//SC_LOG_HANDLE
 
 
@@ -113,7 +112,7 @@ _handle_entitlement_check_failure(pid_t pid)
 __private_extern__
 void
 _libSC_info_server_init(libSC_info_server_t *server_info) {
-	bzero(server_info, sizeof(*server_info));
+	memset(server_info, 0, sizeof(*server_info));
 	server_info->info = CFDictionaryCreateMutable(NULL,
 						      0,
 						      &kCFTypeDictionaryKeyCallBacks,

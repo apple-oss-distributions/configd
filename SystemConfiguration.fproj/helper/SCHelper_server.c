@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2005-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -38,7 +38,7 @@
 #include <Security/Security.h>
 #include <Security/SecTask.h>
 
-#define SC_LOG_HANDLE		__log_SCHelper()
+#define SC_LOG_HANDLE		__log_SCHelper
 #define SC_LOG_HANDLE_TYPE	static
 #include "SCPreferencesInternal.h"
 #include "SCHelper_client.h"
@@ -122,7 +122,7 @@ static pthread_mutex_t	sessions_lock			= PTHREAD_MUTEX_INITIALIZER;
 
 
 static os_log_t
-__log_SCHelper()
+__log_SCHelper(void)
 {
 	static os_log_t	log	= NULL;
 
@@ -201,7 +201,7 @@ __SCHelperSessionSetAuthorization(SCHelperSessionRef session, CFTypeRef authoriz
 		if (CFDataGetLength(authorizationData) == sizeof(extForm.bytes)) {
 			OSStatus	status;
 
-			bcopy(CFDataGetBytePtr(authorizationData), extForm.bytes, sizeof(extForm.bytes));
+			memcpy(extForm.bytes, CFDataGetBytePtr(authorizationData), sizeof(extForm.bytes));
 			status = AuthorizationCreateFromExternalForm(&extForm,
 								     &sessionPrivate->authorization);
 			if (status != errAuthorizationSuccess) {
@@ -700,7 +700,7 @@ do_Auth(SCHelperSessionRef session, void *info, CFDataRef data, uint32_t *status
 	CFDictionaryRef	authorizationDict;
 #if	!TARGET_OS_IPHONE
 	CFDataRef	authorizationData	= NULL;
-#endif
+#endif	// !TARGET_OS_IPHONE
 	Boolean		ok			= FALSE;
 
 	if (!_SCUnserialize((CFPropertyListRef*)&authorizationDict, data, NULL, 0)) {
@@ -721,7 +721,7 @@ do_Auth(SCHelperSessionRef session, void *info, CFDataRef data, uint32_t *status
 	if (authorizationData != NULL && isA_CFData(authorizationData)) {
 		ok = __SCHelperSessionSetAuthorization(session, authorizationData);
 	} else
-#endif
+#endif	// !TARGET_OS_IPHONE
 	{
 		CFStringRef	authorizationInfo;
 
@@ -2097,6 +2097,8 @@ _helperinit(mach_port_t			server,
 	pthread_attr_t			tattr;
 	pthread_t			tid;
 
+	*newSession = MACH_PORT_NULL;
+
 	session = __SCHelperSessionFindWithPort(server);
 	if (session != NULL) {
 #ifdef	DEBUG
@@ -2181,7 +2183,7 @@ _helperinit(mach_port_t			server,
 	pthread_attr_init(&tattr);
 	pthread_attr_setscope(&tattr, PTHREAD_SCOPE_SYSTEM);
 	pthread_attr_setdetachstate(&tattr, PTHREAD_CREATE_DETACHED);
-	pthread_attr_setstacksize(&tattr, 96 * 1024);	// each thread gets a 96K stack
+//	pthread_attr_setstacksize(&tattr, 96 * 1024);	// each thread gets a 96K stack
 	pthread_create(&tid, &tattr, newHelper, (void *)session);
 	pthread_attr_destroy(&tattr);
 

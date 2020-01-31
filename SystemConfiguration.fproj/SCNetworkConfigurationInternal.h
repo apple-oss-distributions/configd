@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -29,17 +29,14 @@
 #include <CoreFoundation/CFRuntime.h>
 
 #ifndef	SC_LOG_HANDLE
-#define	SC_LOG_HANDLE	__log_SCNetworkConfiguration()
+#define	SC_LOG_HANDLE	__log_SCNetworkConfiguration
 #endif	// SC_LOG_HANDLE
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPrivate.h>
 #include <SystemConfiguration/SCValidation.h>
-#include <SystemConfiguration/SCPreferencesPathKey.h>
-#include <IOKit/IOKitLib.h>
-
-#if	!TARGET_OS_SIMULATOR
+#include "SCPreferencesPathKey.h"
 #include "IPMonitorControl.h"
-#endif	// !TARGET_OS_SIMULATOR
+#include <IOKit/IOKitLib.h>
 
 
 typedef struct {
@@ -157,6 +154,7 @@ typedef struct {
 	uint64_t		entryID;
 	CFMutableDictionaryRef	overrides;
 	CFStringRef		prefix;
+	Boolean			trustRequired;
 	CFNumberRef		type;
 	CFNumberRef		unit;
 	CFNumberRef		family;
@@ -168,7 +166,7 @@ typedef struct {
 	} usb;
 
 	// misc
-	int			sort_order;		// sort order for this interface
+	unsigned int		sort_order;		// sort order for this interface
 
 	// for BOND interfaces
 	Boolean			supportsBond;
@@ -193,10 +191,9 @@ typedef struct {
 		CFDictionaryRef		options;
 	} vlan;
 
-#if	!TARGET_OS_SIMULATOR
 	// for interface rank assertions
 	IPMonitorControlRef	IPMonitorControl;
-#endif	// !TARGET_OS_SIMULATOR
+
 } SCNetworkInterfacePrivate, *SCNetworkInterfacePrivateRef;
 
 
@@ -291,15 +288,6 @@ CFStringRef
 __SCNetworkInterfaceCopyXNonLocalizedDisplayName(SCNetworkInterfaceRef	interface);
 #endif	// !TARGET_OS_IPHONE
 
-int
-__SCNetworkInterfaceCreateCapabilities		(SCNetworkInterfaceRef	interface,
-						 int			capability_base,
-						 CFDictionaryRef	capability_options);
-
-int
-__SCNetworkInterfaceCreateMediaOptions		(SCNetworkInterfaceRef	interface,
-						 CFDictionaryRef	media_options);
-
 CFStringRef
 __SCNetworkInterfaceGetDefaultConfigurationType	(SCNetworkInterfaceRef	interface);
 
@@ -311,10 +299,6 @@ __SCNetworkInterfaceGetEntityType		(SCNetworkInterfaceRef interface);
 
 CFStringRef
 __SCNetworkInterfaceGetNonLocalizedDisplayName	(SCNetworkInterfaceRef	interface);
-
-Boolean
-__SCNetworkInterfaceSetDisableUntilNeededValue	(SCNetworkInterfaceRef	interface,
-						 CFTypeRef		disable);
 
 void
 __SCNetworkInterfaceSetUserDefinedName(SCNetworkInterfaceRef interface, CFStringRef name);
@@ -350,7 +334,7 @@ __SCNetworkInterfaceIsValidExtendedConfigurationType
 						 CFStringRef		extendedType,
 						 Boolean		requirePerInterface);
 
-CFDictionaryRef
+CFPropertyListRef
 __SCNetworkInterfaceGetTemplateOverrides	(SCNetworkInterfaceRef	interface,
 						 CFStringRef		overrideType);
 
@@ -413,10 +397,10 @@ __SCBridgeInterfaceSetMemberInterfaces		(SCBridgeInterfaceRef	bridge,
 						 CFArrayRef		members);
 
 void
-_SCNetworkInterfaceCacheOpen();
+_SCNetworkInterfaceCacheOpen(void);
 
 void
-_SCNetworkInterfaceCacheClose();
+_SCNetworkInterfaceCacheClose(void);
 
 #pragma mark -
 #pragma mark SCNetworkProtocol configuration (internal)
@@ -446,6 +430,9 @@ __SCNetworkServiceCreatePrivate			(CFAllocatorRef		allocator,
 						 SCPreferencesRef	prefs,
 						 CFStringRef		serviceID,
 						 SCNetworkInterfaceRef	interface);
+
+Boolean
+__SCNetworkServiceExists			(SCNetworkServiceRef	service);
 
 Boolean
 __SCNetworkServiceExistsForInterface		(CFArrayRef		services,
@@ -488,12 +475,16 @@ __SCNetworkServiceAddProtocolToService		(SCNetworkServiceRef		service,
 #pragma mark SCNetworkSet configuration (internal)
 
 
+Boolean
+__SCNetworkSetExists				(SCNetworkSetRef		set);
+
+
 #pragma mark -
 #pragma mark Logging
 
 
 os_log_t
-__log_SCNetworkConfiguration			();
+__log_SCNetworkConfiguration			(void);
 
 
 #pragma mark -

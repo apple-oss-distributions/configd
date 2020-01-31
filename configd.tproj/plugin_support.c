@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -49,7 +49,7 @@
 #include "configd.h"
 #include "configd_server.h"
 #include <SystemConfiguration/SCDPlugin.h>
-void	_SCDPluginExecInit();
+#include "SystemConfigurationInternal.h"
 
 
 /*
@@ -93,10 +93,10 @@ typedef struct {
 	Boolean					enabled;
 	Boolean					forced;
 	Boolean					verbose;
-	SCDynamicStoreBundleLoadFunction	load;
-	SCDynamicStoreBundleStartFunction	start;
-	SCDynamicStoreBundlePrimeFunction	prime;
-	SCDynamicStoreBundleStopFunction	stop;
+	SCDynamicStoreBundleLoadFunction	*load;
+	SCDynamicStoreBundleStartFunction	*start;
+	SCDynamicStoreBundlePrimeFunction	*prime;
+	SCDynamicStoreBundleStopFunction	*stop;
 } *bundleInfoRef;
 
 
@@ -125,54 +125,54 @@ extern SCDynamicStoreBundleLoadFunction		load_QoSMarking;
 
 
 typedef struct {
-	const CFStringRef	bundleID;
-	const void		*load;		// SCDynamicStoreBundleLoadFunction
-	const void		*start;		// SCDynamicStoreBundleStartFunction
-	const void		*prime;		// SCDynamicStoreBundlePrimeFunction
-	const void		*stop;		// SCDynamicStoreBundleStopFunction
+	const CFStringRef			bundleID;
+	SCDynamicStoreBundleLoadFunction	*load;
+	SCDynamicStoreBundleStartFunction	*start;
+	SCDynamicStoreBundlePrimeFunction	*prime;
+	SCDynamicStoreBundleStopFunction	*stop;
 } builtin, *builtinRef;
 
 
 static const builtin builtin_plugins[] = {
 	{
 		CFSTR("com.apple.SystemConfiguration.IPMonitor"),
-		&load_IPMonitor,
+		load_IPMonitor,
 		NULL,
-		&prime_IPMonitor,
+		prime_IPMonitor,
 		NULL
 	},
 #if	!TARGET_OS_SIMULATOR
 	{
 		CFSTR("com.apple.SystemConfiguration.InterfaceNamer"),
-		&load_InterfaceNamer,
+		load_InterfaceNamer,
 		NULL,
 		NULL,
 		NULL
 	},
 	{
 		CFSTR("com.apple.SystemConfiguration.KernelEventMonitor"),
-		&load_KernelEventMonitor,
+		load_KernelEventMonitor,
 		NULL,
-		&prime_KernelEventMonitor,
+		prime_KernelEventMonitor,
 		NULL
 	},
 	{
 		CFSTR("com.apple.SystemConfiguration.LinkConfiguration"),
-		&load_LinkConfiguration,
+		load_LinkConfiguration,
 		NULL,
 		NULL,
 		NULL
 	},
 	{
 		CFSTR("com.apple.SystemConfiguration.PreferencesMonitor"),
-		&load_PreferencesMonitor,
+		load_PreferencesMonitor,
 		NULL,
-		&prime_PreferencesMonitor,
+		prime_PreferencesMonitor,
 		NULL
 	},
 	{
 		CFSTR("com.apple.SystemConfiguration.QoSMarking"),
-		&load_QoSMarking,
+		load_QoSMarking,
 		NULL,
 		NULL,
 		NULL
@@ -560,12 +560,9 @@ stopComplete(void *info)
 	CFDictionaryRemoveValue(exiting, bundle);
 
 	if (CFDictionaryGetCount(exiting) == 0) {
-		int	status;
-
 		// if all of the plugins are happy
-		status = server_shutdown();
 		SC_log(LOG_INFO, "server shutdown complete (%f)", CFAbsoluteTimeGetCurrent());
-		exit (status);
+		exit (EX_OK);
 	}
 
 	return;
@@ -580,7 +577,6 @@ stopDelayed(CFRunLoopTimerRef timer, void *info)
 	const void	**keys;
 	CFIndex		i;
 	CFIndex		n;
-	int		status;
 
 	SC_log(LOG_INFO, "server shutdown was delayed, unresponsive plugins:");
 
@@ -601,8 +597,7 @@ stopDelayed(CFRunLoopTimerRef timer, void *info)
 	}
 	CFAllocatorDeallocate(NULL, keys);
 
-	status = server_shutdown();
-	exit (status);
+	exit (EX_OK);
 }
 
 static CFStringRef
@@ -648,9 +643,8 @@ stopBundle(const void *value, void *context)
 	stopRls = CFRunLoopSourceCreate(NULL, 0, &stopContext);
 	CFRunLoopAddSource(CFRunLoopGetCurrent(), stopRls, kCFRunLoopDefaultMode);
 	CFDictionaryAddValue(exiting, bundleInfo->bundle, stopRls);
-	CFRelease(stopRls);
-
 	(*bundleInfo->stop)(stopRls);
+	CFRelease(stopRls);
 
 	return;
 }
@@ -672,12 +666,9 @@ stopBundles()
 			     NULL);
 
 	if (CFDictionaryGetCount(exiting) == 0) {
-		int	status;
-
 		// if all of the plugins are happy
-		status = server_shutdown();
 		SC_log(LOG_INFO, "server shutdown complete (%f)", CFAbsoluteTimeGetCurrent());
-		exit (status);
+		exit (EX_OK);
 	} else {
 		CFRunLoopTimerRef	timer;
 
@@ -906,7 +897,7 @@ plugin_exec(void *arg)
 			CFArrayRef	bundles;
 			CFURLRef	url;
 
-#if	TARGET_OS_SIMULATOR
+#if	TARGET_OS_SIMULATOR && !TARGET_OS_IOSMAC
 			const char	*path_sim_prefix;
 
 			path_sim_prefix = getenv("IPHONE_SIMULATOR_ROOT");
@@ -919,7 +910,7 @@ plugin_exec(void *arg)
 			} else {
 				path[0] = '\0';
 			}
-#endif	// TARGET_OS_SIMULATOR
+#endif	// TARGET_OS_SIMULATOR && !TARGET_OS_IOSMAC
 
 			/* load any available bundle */
 			strlcat(path, BUNDLE_DIRECTORY, sizeof(path));

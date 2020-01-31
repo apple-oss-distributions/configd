@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004, 2006, 2009-2011, 2013, 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2004, 2006, 2009-2011, 2013, 2015-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -24,7 +24,7 @@
 #ifndef _SCDYNAMICSTOREINTERNAL_H
 #define _SCDYNAMICSTOREINTERNAL_H
 
-#include <Availability.h>
+#include <os/availability.h>
 #include <TargetConditionals.h>
 #include <sys/cdefs.h>
 #include <dispatch/dispatch.h>
@@ -32,15 +32,12 @@
 #include <mach/mach.h>
 #include <pthread.h>
 #include <regex.h>
-#ifdef	VERBOSE_ACTIVITY_LOGGING
-#include <os/activity.h>
-#endif	// VERBOSE_ACTIVITY_LOGGING
 #include <os/log.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreFoundation/CFRuntime.h>
 
 #ifndef	SC_LOG_HANDLE
-#define	SC_LOG_HANDLE	__log_SCDynamicStore()
+#define	SC_LOG_HANDLE	__log_SCDynamicStore
 #endif	// SC_LOG_HANDLE
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPrivate.h>
@@ -53,7 +50,6 @@ typedef enum {
 	Using_NotifierWait,
 	Using_NotifierInformViaMachPort,
 	Using_NotifierInformViaFD,
-	Using_NotifierInformViaSignal,
 	Using_NotifierInformViaRunLoop,
 	Using_NotifierInformViaDispatch
 } __SCDynamicStoreNotificationStatus;
@@ -67,11 +63,6 @@ typedef struct {
 	/* client side of the "configd" session */
 	CFStringRef			name;
 	CFDictionaryRef			options;
-
-#ifdef	VERBOSE_ACTIVITY_LOGGING
-	/* activity tracing */
-	os_activity_t			activity;
-#endif	// VERBOSE_ACTIVITY_LOGGING
 
 	/* server side of the "configd" session */
 	mach_port_t			server;
@@ -112,17 +103,21 @@ typedef struct {
 	int				notifyFile;
 	int				notifyFileIdentifier;
 
-	/* "server" information associated with SCDynamicStoreNotifySignal() */
-	int				notifySignal;
-	task_t				notifySignalTask;
+	/* caching */
+	Boolean				cache_active;
+	CFMutableDictionaryRef		cached_keys;
+	CFMutableDictionaryRef		cached_set;
+	CFMutableArrayRef		cached_removals;
+	CFMutableArrayRef		cached_notifys;
 
 } SCDynamicStorePrivate, *SCDynamicStorePrivateRef;
 
 
 __BEGIN_DECLS
 
+__private_extern__
 os_log_t
-__log_SCDynamicStore			();
+__log_SCDynamicStore			(void);
 
 SCDynamicStorePrivateRef
 __SCDynamicStoreCreatePrivate		(CFAllocatorRef			allocator,
@@ -130,18 +125,21 @@ __SCDynamicStoreCreatePrivate		(CFAllocatorRef			allocator,
 					 SCDynamicStoreCallBack		callout,
 					 SCDynamicStoreContext		*context);
 
+__private_extern__
 SCDynamicStoreRef
 __SCDynamicStoreNullSession		(void);
 
+__private_extern__
 Boolean
 __SCDynamicStoreCheckRetryAndHandleError(SCDynamicStoreRef		store,
 					 kern_return_t			status,
 					 int				*sc_status,
 					 const char			*func);
 
+__private_extern__
 Boolean
 __SCDynamicStoreReconnectNotifications	(SCDynamicStoreRef		store);
 
 __END_DECLS
 
-#endif /* _SCDYNAMICSTOREINTERNAL_H */
+#endif	/* _SCDYNAMICSTOREINTERNAL_H */

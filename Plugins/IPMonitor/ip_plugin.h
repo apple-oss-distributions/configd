@@ -57,7 +57,7 @@
 #endif	// !my_log
 
 os_log_t
-__log_IPMonitor();
+__log_IPMonitor(void);
 
 boolean_t
 cfstring_to_ip(CFStringRef str, struct in_addr * ip_p);
@@ -72,7 +72,7 @@ const char *
 my_if_indextoname(unsigned int idx, char if_name[IFNAMSIZ]);
 
 boolean_t
-service_contains_protocol(CFDictionaryRef service_dict, int af);
+service_is_routable(CFDictionaryRef service_dict, int af);
 
 boolean_t
 service_is_scoped_only(CFDictionaryRef service_dict);

@@ -3,7 +3,6 @@
  * DO NOT EDIT!
  */
 
-#include <Availability.h>
 #include <TargetConditionals.h>
 #include <CoreFoundation/CFString.h>
 
@@ -62,21 +61,27 @@ const CFStringRef kSCEntNetSMB                                     = CFSTR("SMB"
 #endif	// !TARGET_OS_IPHONE
 
 const CFStringRef kSCEntNet6to4                                    = CFSTR("6to4");
-const CFStringRef kSCEntNetActiveDuringSleepRequested              = CFSTR("ActiveDuringSleepRequested");
-const CFStringRef kSCEntNetActiveDuringSleepSupported              = CFSTR("ActiveDuringSleepSupported");
 const CFStringRef kSCEntNetAppLayer                                = CFSTR("AppLayer");
 
 
 const CFStringRef kSCEntNetEAPOL                                   = CFSTR("EAPOL");
+const CFStringRef kSCEntNetIdleRoute                               = CFSTR("IdleRoute");
+const CFStringRef kSCEntNetInterfaceActiveDuringSleepRequested     = CFSTR("ActiveDuringSleepRequested");
+const CFStringRef kSCEntNetInterfaceActiveDuringSleepSupported     = CFSTR("ActiveDuringSleepSupported");
+const CFStringRef kSCEntNetInterfaceDelegation                     = CFSTR("InterfaceDelegation");
+const CFStringRef kSCEntNetIPv4ARPCollision                        = CFSTR("IPv4ARPCollision");
+const CFStringRef kSCEntNetIPv4PortInUse                           = CFSTR("PortInUse");
 const CFStringRef kSCEntNetIPv4RouterARPFailure                    = CFSTR("IPv4RouterARPFailure");
 const CFStringRef kSCEntNetIPv4RouterARPAlive                      = CFSTR("IPv4RouterARPAlive");
 const CFStringRef kSCEntNetIPv6RouterExpired                       = CFSTR("IPv6RouterExpired");
 const CFStringRef kSCEntNetLinkIssues                              = CFSTR("LinkIssues");
 const CFStringRef kSCEntNetLinkQuality                             = CFSTR("LinkQuality");
 const CFStringRef kSCEntNetLoopback                                = CFSTR("Loopback");
+const CFStringRef kSCEntNetNAT64                                   = CFSTR("NAT64");
 const CFStringRef kSCEntNetNAT64PrefixRequest                      = CFSTR("NAT64PrefixRequest");
 const CFStringRef kSCEntNetOnDemand                                = CFSTR("OnDemand");
 const CFStringRef kSCEntNetQoSMarkingPolicy                        = CFSTR("QoSMarkingPolicy");
+const CFStringRef kSCEntNetRefreshConfiguration                    = CFSTR("RefreshConfiguration");
 const CFStringRef kSCEntNetService                                 = CFSTR("__SERVICE__");
 const CFStringRef kSCEntNetVPN                                     = CFSTR("VPN");
 const CFStringRef kSCPropNetOverridePrimary                        = CFSTR("OverridePrimary");
@@ -194,6 +199,7 @@ const CFStringRef kSCValNetIPv4ConfigMethodLinkLocal               = CFSTR("Link
 const CFStringRef kSCValNetIPv4ConfigMethodManual                  = CFSTR("Manual");
 const CFStringRef kSCValNetIPv4ConfigMethodPPP                     = CFSTR("PPP");
 const CFStringRef kSCPropNetIPv4AdditionalRoutes                   = CFSTR("AdditionalRoutes");
+const CFStringRef kSCPropNetIPv4CLAT46                             = CFSTR("CLAT46");
 const CFStringRef kSCPropNetIPv4ExcludedRoutes                     = CFSTR("ExcludedRoutes");
 const CFStringRef kSCPropNetIPv4IncludedRoutes                     = CFSTR("IncludedRoutes");
 const CFStringRef kSCValNetIPv4ConfigMethodFailover                = CFSTR("Failover");
@@ -218,6 +224,8 @@ const CFStringRef kSCPropNetIPv6AdditionalRoutes                   = CFSTR("Addi
 const CFStringRef kSCPropNetIPv6EnableCGA                          = CFSTR("EnableCGA");
 const CFStringRef kSCPropNetIPv6ExcludedRoutes                     = CFSTR("ExcludedRoutes");
 const CFStringRef kSCPropNetIPv6IncludedRoutes                     = CFSTR("IncludedRoutes");
+const CFStringRef kSCPropNetIPv6LinkLocalAddress                   = CFSTR("LinkLocalAddress");
+const CFStringRef kSCPropNetIPv6PerformPLATDiscovery               = CFSTR("PerformPLATDiscovery");
 const CFStringRef kSCPropNetIPv6RouteDestinationAddress            = CFSTR("DestinationAddress");
 const CFStringRef kSCPropNetIPv6RoutePrefixLength                  = CFSTR("PrefixLength");
 const CFStringRef kSCPropNetIPv6RouteGatewayAddress                = CFSTR("GatewayAddress");
@@ -264,8 +272,8 @@ const CFStringRef kSCPropNetPPPDisconnectOnSleep                   = CFSTR("Disc
 const CFStringRef kSCPropNetPPPDisconnectOnWake                    = CFSTR("DisconnectOnWake");
 const CFStringRef kSCPropNetPPPDisconnectOnWakeTimer               = CFSTR("DisconnectOnWakeTimer");
 const CFStringRef kSCPropNetPPPDisconnectTime                      = CFSTR("DisconnectTime");
-const CFStringRef kSCPropNetPPPIdleReminderTimer                   = CFSTR("IdleReminderTimer");
 const CFStringRef kSCPropNetPPPIdleReminder                        = CFSTR("IdleReminder");
+const CFStringRef kSCPropNetPPPIdleReminderTimer                   = CFSTR("IdleReminderTimer");
 const CFStringRef kSCPropNetPPPLastCause                           = CFSTR("LastCause");
 const CFStringRef kSCPropNetPPPLogfile                             = CFSTR("Logfile");
 const CFStringRef kSCPropNetPPPPlugins                             = CFSTR("Plugins");
@@ -332,6 +340,9 @@ const CFStringRef kSCPropNetL2TPTransport                          = CFSTR("Tran
 const CFStringRef kSCValNetL2TPIPSecSharedSecretEncryptionKeychain = CFSTR("Keychain");
 const CFStringRef kSCValNetL2TPTransportIP                         = CFSTR("IP");
 const CFStringRef kSCValNetL2TPTransportIPSec                      = CFSTR("IPSec");
+const CFStringRef kSCPropNetNAT64PrefixList                        = CFSTR("PrefixList");
+const CFStringRef kSCPropNetNAT64PLATDiscoveryStartTime            = CFSTR("PLATDiscoveryStartTime");
+const CFStringRef kSCPropNetNAT64PLATDiscoveryCompletionTime       = CFSTR("PLATDiscoveryCompletionTime");
 const CFStringRef kSCPropNetProxiesExceptionsList                  = CFSTR("ExceptionsList");
 const CFStringRef kSCPropNetProxiesExcludeSimpleHostnames          = CFSTR("ExcludeSimpleHostnames");
 const CFStringRef kSCPropNetProxiesFTPEnable                       = CFSTR("FTPEnable");

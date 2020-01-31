@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2001, 2003, 2006, 2007, 2011, 2013, 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003, 2006, 2007, 2011, 2013, 2016, 2017 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -41,7 +41,7 @@
 #define _SCSCHEMADEFINITIONS_H
 #define _SCSCHEMADEFINITIONSPRIVATE_H
 
-#define	SC_LOG_HANDLE	__configd_SCDynamicStore()
+#define	SC_LOG_HANDLE	__configd_SCDynamicStore
 #include "SCDynamicStoreInternal.h"
 #include "config_types.h"
 #include "_SCD.h"
@@ -53,13 +53,13 @@ extern CFMutableSetRef	_plugins_verbose;		/* bundle identifiers to enable verbos
 
 
 #define SC_trace(__string, ...)	\
-	os_log_debug(SC_LOG_HANDLE, __string, ## __VA_ARGS__)
+	os_log_debug(SC_LOG_HANDLE(), __string, ## __VA_ARGS__)
 
 
 __BEGIN_DECLS
 
 os_log_t
-__configd_SCDynamicStore	();
+__configd_SCDynamicStore	(void);
 
 __END_DECLS
 

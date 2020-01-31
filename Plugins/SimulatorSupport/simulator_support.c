@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2013, 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -29,6 +29,7 @@
  */
 
 
+#include <TargetConditionals.h>
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPrivate.h>
 #include <SystemConfiguration/SCValidation.h>
@@ -36,7 +37,7 @@
 #include <dns_sd.h>
 #include <dns_sd_private.h>
 
-#include "cache.h"
+#if	TARGET_OS_SIMULATOR && !TARGET_OS_IOSMAC
 
 
 static CFMutableArrayRef	mirror_keys	= NULL;
@@ -53,7 +54,7 @@ static SCDynamicStoreRef	store_sim	= NULL;
  * Logging
  */
 __private_extern__ os_log_t
-__log_SimulatorSupport()
+__log_SimulatorSupport(void)
 {
 	static os_log_t	log = NULL;
 
@@ -95,7 +96,7 @@ mirror(SCDynamicStoreRef store, CFArrayRef changes, void *info)
 	content_sim = SCDynamicStoreCopyMultiple(store_sim, changes, NULL);
 
 	// update
-	cache_open();
+	_SCDynamicStoreCacheOpen(store);
 	for (i = 0; i < n; i++) {
 		CFStringRef		key;
 		CFPropertyListRef	val;
@@ -104,21 +105,21 @@ mirror(SCDynamicStoreRef store, CFArrayRef changes, void *info)
 		val = (content_host != NULL) ? CFDictionaryGetValue(content_host, key) : NULL;
 		if (val != NULL) {
 			// if "host" content changed
-			cache_SCDynamicStoreSetValue(store_sim, key, val);
+			SCDynamicStoreSetValue(store_sim, key, val);
 		} else {
 			// if no "host" content
 			val = (content_sim != NULL) ? CFDictionaryGetValue(content_sim, key) : NULL;
 			if (val != NULL) {
 				// if we need to remove the "sim" content
-				cache_SCDynamicStoreRemoveValue(store_sim, key);
+				SCDynamicStoreRemoveValue(store_sim, key);
 			} else {
 				// if no "sim" content to remove, just notify
-				cache_SCDynamicStoreNotifyValue(store_sim, key);
+				SCDynamicStoreNotifyValue(store_sim, key);
 			}
 		}
 	}
-	cache_write(store_sim);
-	cache_close();
+	_SCDynamicStoreCacheCommitChanges(store_sim);
+	_SCDynamicStoreCacheClose(store);
 
 	// cleanup
 	if ((info == NULL) && (content_host != NULL)) {
@@ -321,3 +322,5 @@ main(int argc, char **argv)
 	return 0;
 }
 #endif
+
+#endif	// TARGET_OS_SIMULATOR && !TARGET_OS_IOSMAC

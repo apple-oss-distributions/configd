@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -71,15 +71,15 @@ inet_dgram_socket()
 }
 
 static int
-siocgifmedia(int s, const char * ifname, int * status, int * active)
+siocgifxmedia(int s, const char * ifname, int * status, int * active)
 {
 	struct ifmediareq	ifmr;
 
 	*status = 0;
 	*active = 0;
-	bzero(&ifmr, sizeof(ifmr));
+	memset(&ifmr, 0, sizeof(ifmr));
 	strlcpy(ifmr.ifm_name, ifname, sizeof(ifmr.ifm_name));
-	if (ioctl(s, SIOCGIFMEDIA, &ifmr) == -1) {
+	if (ioctl(s, SIOCGIFXMEDIA, &ifmr) == -1) {
 		return (-1);
 	}
 	if (ifmr.ifm_count != 0) {
@@ -97,9 +97,9 @@ if_bond_status_req_copy(int s, const char * ifname)
 	struct if_bond_status_req *	ibsr_p;
 	struct ifreq			ifr;
 
-	bzero(&ifr, sizeof(ifr));
+	memset(&ifr, 0, sizeof(ifr));
 	strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
-	bzero((char *)&ibr, sizeof(ibr));
+	memset((char *)&ibr, 0, sizeof(ibr));
 	ibr.ibr_op = IF_BOND_OP_GET_STATUS;
 	ibsr_p = &ibr.ibr_ibru.ibru_status;
 	ibsr_p->ibsr_version = IF_BOND_STATUS_REQ_VERSION;
@@ -1253,14 +1253,14 @@ SCBondInterfaceCopyStatus(SCBondInterfaceRef bond)
 				if_name,
 				sizeof(if_name),
 				kCFStringEncodingASCII);
-	if (siocgifmedia(s, if_name, &bond_if_status, &bond_if_active) == -1) {
+	if (siocgifxmedia(s, if_name, &bond_if_status, &bond_if_active) == -1) {
 		_SCErrorSet(errno);
 		switch (errno) {
 			case EBUSY :
 			case ENXIO :
 				break;
 			default :
-				SC_log(LOG_NOTICE, "siocgifmedia(%s) failed: %s",
+				SC_log(LOG_NOTICE, "siocgifxmedia(%s) failed: %s",
 				       if_name,
 				       strerror(errno));
 		}
@@ -1314,13 +1314,13 @@ SCBondInterfaceCopyStatus(SCBondInterfaceRef bond)
 			int			status = 0;
 			static lacp_system	zeroes = { {0, 0, 0, 0, 0, 0}};
 
-			if (siocgifmedia(s, scan_p->ibs_if_name, &status, &active) == -1) {
+			if (siocgifxmedia(s, scan_p->ibs_if_name, &status, &active) == -1) {
 				switch (errno) {
 					case EBUSY :
 					case ENXIO :
 						break;
 					default :
-						SC_log(LOG_NOTICE, "siocgifmedia(%s) failed: %s",
+						SC_log(LOG_NOTICE, "siocgifxmedia(%s) failed: %s",
 						       if_name,
 						       strerror(errno));
 						break;
@@ -1404,13 +1404,13 @@ __bond_set_mode(int s, CFStringRef bond_if, CFNumberRef mode)
 	}
 
 	// bond interface
-	bzero(&ifr, sizeof(ifr));
+	memset(&ifr, 0, sizeof(ifr));
 	(void) _SC_cfstring_to_cstring(bond_if,
 				       ifr.ifr_name,
 				       sizeof(ifr.ifr_name),
 				       kCFStringEncodingASCII);
 	ifr.ifr_data = (caddr_t)&breq;
-	bzero(&breq, sizeof(breq));
+	memset(&breq, 0, sizeof(breq));
 	breq.ibr_op = IF_BOND_OP_SET_MODE;
 	breq.ibr_ibru.ibru_int_val = mode_num;
 	if (ioctl(s, SIOCSIFBOND, (caddr_t)&ifr) == -1) {
@@ -1432,7 +1432,7 @@ __bond_add_interface(int s, CFStringRef bond_if, CFStringRef interface_if)
 	struct ifreq		ifr;
 
 	// bond interface
-	bzero(&ifr, sizeof(ifr));
+	memset(&ifr, 0, sizeof(ifr));
 	(void) _SC_cfstring_to_cstring(bond_if,
 				       ifr.ifr_name,
 				       sizeof(ifr.ifr_name),
@@ -1440,7 +1440,7 @@ __bond_add_interface(int s, CFStringRef bond_if, CFStringRef interface_if)
 	ifr.ifr_data = (caddr_t)&breq;
 
 	// new bond member
-	bzero(&breq, sizeof(breq));
+	memset(&breq, 0, sizeof(breq));
 	breq.ibr_op = IF_BOND_OP_ADD_INTERFACE;
 	(void) _SC_cfstring_to_cstring(interface_if,
 				       breq.ibr_ibru.ibru_if_name,
@@ -1468,7 +1468,7 @@ __bond_remove_interface(int s, CFStringRef bond_if, CFStringRef interface_if)
 	struct ifreq		ifr;
 
 	// bond interface
-	bzero(&ifr, sizeof(ifr));
+	memset(&ifr, 0, sizeof(ifr));
 	(void) _SC_cfstring_to_cstring(bond_if,
 				       ifr.ifr_name,
 				       sizeof(ifr.ifr_name),
@@ -1476,7 +1476,7 @@ __bond_remove_interface(int s, CFStringRef bond_if, CFStringRef interface_if)
 	ifr.ifr_data = (caddr_t)&breq;
 
 	// bond member to remove
-	bzero(&breq, sizeof(breq));
+	memset(&breq, 0, sizeof(breq));
 	breq.ibr_op = IF_BOND_OP_REMOVE_INTERFACE;
 	(void) _SC_cfstring_to_cstring(interface_if,
 				       breq.ibr_ibru.ibru_if_name,

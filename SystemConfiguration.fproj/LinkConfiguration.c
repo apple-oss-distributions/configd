@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2007, 2010, 2011, 2013, 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2007, 2010, 2011, 2013, 2015-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -100,7 +100,7 @@ __getCapabilities(CFStringRef	interfaceName,
 	Boolean		ok		= FALSE;
 	int		sock		= -1;
 
-	bzero((void *)&ifr, sizeof(ifr));
+	memset((void *)&ifr, 0, sizeof(ifr));
 	if (_SC_cfstring_to_cstring(interfaceName, ifr.ifr_name, sizeof(ifr.ifr_name), kCFStringEncodingASCII) == NULL) {
 		SC_log(LOG_NOTICE, "could not convert interface name");
 		_SCErrorSet(kSCStatusInvalidArgument);
@@ -397,7 +397,7 @@ __copyMediaList(CFStringRef interfaceName)
 	int			sock	= -1;
 
 	ifm = (struct ifmediareq *)CFAllocatorAllocate(NULL, sizeof(struct ifmediareq), 0);
-	bzero((void *)ifm, sizeof(*ifm));
+	memset((void *)ifm, 0, sizeof(*ifm));
 
 	if (_SC_cfstring_to_cstring(interfaceName, ifm->ifm_name, sizeof(ifm->ifm_name), kCFStringEncodingASCII) == NULL) {
 		SC_log(LOG_NOTICE, "could not convert interface name");
@@ -410,15 +410,15 @@ __copyMediaList(CFStringRef interfaceName)
 		goto done;
 	}
 
-	if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)ifm) == -1) {
-//		SC_log(LOG_NOTICE, "ioctl(SIOCGIFMEDIA) failed: %s", strerror(errno));
+	if (ioctl(sock, SIOCGIFXMEDIA, (caddr_t)ifm) == -1) {
+//		SC_log(LOG_NOTICE, "ioctl(SIOCGIFXMEDIA) failed: %s", strerror(errno));
 		goto done;
 	}
 
 	if (ifm->ifm_count > 0) {
 		ifm->ifm_ulist = (int *)CFAllocatorAllocate(NULL, ifm->ifm_count * sizeof(int), 0);
-		if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)ifm) == -1) {
-			SC_log(LOG_NOTICE, "ioctl(SIOCGIFMEDIA) failed: %s", strerror(errno));
+		if (ioctl(sock, SIOCGIFXMEDIA, (caddr_t)ifm) == -1) {
+			SC_log(LOG_NOTICE, "ioctl(SIOCGIFXMEDIA) failed: %s", strerror(errno));
 			goto done;
 		}
 	}
@@ -1012,7 +1012,7 @@ SCNetworkInterfaceCopyMTU(SCNetworkInterfaceRef	interface,
 		return FALSE;
 	}
 
-	bzero((void *)&ifr, sizeof(ifr));
+	memset((void *)&ifr, 0, sizeof(ifr));
 	if (_SC_cfstring_to_cstring(interfaceName, ifr.ifr_name, sizeof(ifr.ifr_name), kCFStringEncodingASCII) == NULL) {
 		SC_log(LOG_NOTICE, "could not convert interface name");
 		_SCErrorSet(kSCStatusInvalidArgument);

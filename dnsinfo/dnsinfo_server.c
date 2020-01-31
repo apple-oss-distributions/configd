@@ -51,7 +51,7 @@
 
 #ifdef	SC_LOG_HANDLE
 #include <os/log.h>
-os_log_t	SC_LOG_HANDLE;
+os_log_t	SC_LOG_HANDLE(void);
 #endif	//SC_LOG_HANDLE
 
 
@@ -315,7 +315,7 @@ add_state_handler()
 		if (state_data_size > MAX_STATEDUMP_SIZE) {
 			SC_log(LOG_ERR, "DNS configuration: state data too large (%zd > %zd)",
 			       state_data_size,
-			       MAX_STATEDUMP_SIZE);
+			       (size_t)MAX_STATEDUMP_SIZE);
 			return NULL;
 		}
 
