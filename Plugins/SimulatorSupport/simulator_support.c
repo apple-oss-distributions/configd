@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2015-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2013, 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,7 @@
 #include <dns_sd.h>
 #include <dns_sd_private.h>
 
-#if	TARGET_OS_SIMULATOR && !TARGET_OS_IOSMAC
+#if	TARGET_OS_SIMULATOR && !TARGET_OS_MACCATALYST
 
 
 static CFMutableArrayRef	mirror_keys	= NULL;
@@ -311,7 +311,7 @@ load_SimulatorSupport(CFBundleRef bundle, Boolean bundleVerbose)
 int
 main(int argc, char **argv)
 {
-	_sc_log     = FALSE;
+	_sc_log     = kSCLogDestinationFile;
 	_sc_verbose = (argc > 1) ? TRUE : FALSE;
 
 	load_SimulatorSupport(CFBundleGetMainBundle(), (argc > 1) ? TRUE : FALSE);
@@ -323,4 +323,4 @@ main(int argc, char **argv)
 }
 #endif
 
-#endif	// TARGET_OS_SIMULATOR && !TARGET_OS_IOSMAC
+#endif	// TARGET_OS_SIMULATOR && !TARGET_OS_MACCATALYST

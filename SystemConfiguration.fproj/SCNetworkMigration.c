@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2014-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -34,6 +34,9 @@
 #include "SCPreferencesInternal.h"
 #include <IOKit/network/IONetworkInterface.h>
 #include <IOKit/network/IONetworkController.h>
+#if	!TARGET_OS_SIMULATOR
+#include <IOKit/usb/USB.h>
+#endif	// !TARGET_OS_SIMULATOR
 #include <sys/stat.h>
 #include <copyfile.h>
 #include <sys/param.h>
@@ -41,10 +44,6 @@
 
 #define BACK_TO_MY_MAC			CFSTR("BackToMyMac")
 #define BACK_TO_MY_MAC_DSIDS		CFSTR("BackToMyMacDSIDs")
-#define	PREFS_DEFAULT_DIR_PLIST		"/Library/Preferences/SystemConfiguration"
-#define PREFS_DEFAULT_DIR_RELATIVE	CFSTR("Library/Preferences/SystemConfiguration/")
-#define	PREFS_DEFAULT_CONFIG_PLIST	"preferences.plist"
-#define	NETWORK_INTERFACES_PREFS_PLIST	"NetworkInterfaces.plist"
 #define NUM_MIGRATION_PATHS		2
 #define PLUGIN_ID			CFSTR("System Migration")
 #define PREFERENCES_PLIST_INDEX		0
@@ -82,8 +81,8 @@ _SCNetworkConfigurationCopyMigrationPathsWithBaseURL(CFURLRef baseURL, CFURLRef 
 		CFRetain(baseURL);
 	} else {
 		baseURL = CFURLCreateFromFileSystemRepresentation(NULL,
-								  (UInt8*)PREFS_DEFAULT_DIR_PLIST,
-								  sizeof(PREFS_DEFAULT_DIR_PLIST) - 1,
+								  (UInt8*)PREFS_DEFAULT_DIR_PATH,
+								  sizeof(PREFS_DEFAULT_DIR_PATH) - 1,
 								  TRUE);
 	}
 
@@ -94,8 +93,8 @@ _SCNetworkConfigurationCopyMigrationPathsWithBaseURL(CFURLRef baseURL, CFURLRef 
 								       baseURL);
 
 	*interfaces = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL,
-									    (UInt8*)NETWORK_INTERFACES_PREFS_PLIST,
-									    sizeof(NETWORK_INTERFACES_PREFS_PLIST) - 1,
+									    (UInt8*)INTERFACES_DEFAULT_CONFIG_PLIST,
+									    sizeof(INTERFACES_DEFAULT_CONFIG_PLIST) - 1,
 									    FALSE,
 									    baseURL);
 	CFRelease(baseURL);
@@ -110,17 +109,13 @@ _SCNetworkConfigurationCopyMigrationPaths(CFDictionaryRef options)
 	CFMutableArrayRef migrationPaths = NULL;
 	CFURLRef prefs;
 
-	if (_SC_isInstallEnvironment()) {
-		_sc_debug = 1;
-	}
-	_SCNetworkConfigurationCopyMigrationPathsWithBaseURL(NULL, &prefs, &interfaces);
-
 	migrationPaths = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
-	CFArrayInsertValueAtIndex(migrationPaths, PREFERENCES_PLIST_INDEX, prefs);
-	CFArrayInsertValueAtIndex(migrationPaths, NETWORK_INTERFACES_PLIST_INDEX, interfaces);
-
+	_SCNetworkConfigurationCopyMigrationPathsWithBaseURL(NULL, &prefs, &interfaces);
+	CFArrayAppendValue(migrationPaths, prefs);
+	CFArrayAppendValue(migrationPaths, interfaces);
 	CFRelease(prefs);
 	CFRelease(interfaces);
+
 	return migrationPaths;
 }
 
@@ -142,7 +137,7 @@ _SCNetworkConfigurationRemoveConfigurationFiles(CFURLRef configDir)
 		SC_log(LOG_NOTICE, "Cannot get file system representation for url: %@", configPathURL);
 	} else {
 		if ((remove(configPathString) != 0) && (errno != ENOENT)) {
-			SC_log(LOG_INFO, "remove(\"%s\") failed: %s", configPathString, strerror(errno));
+			SC_log(LOG_NOTICE, "remove(\"%s\") failed: %s", configPathString, strerror(errno));
 		}
 	}
 	CFRelease(configPathURL);
@@ -154,7 +149,7 @@ _SCNetworkConfigurationRemoveConfigurationFiles(CFURLRef configDir)
 		SC_log(LOG_NOTICE, "Cannot get file system representation for url: %@", configNetworkInterfacesPathURL);
 	} else {
 		if ((remove(configNetworkInterfacesPathString) != 0) && (errno != ENOENT)) {
-			SC_log(LOG_INFO, "remove(\"%s\") failed: %s", configNetworkInterfacesPathString, strerror(errno));
+			SC_log(LOG_NOTICE, "remove(\"%s\") failed: %s", configNetworkInterfacesPathString, strerror(errno));
 		}
 	}
 	CFRelease(configNetworkInterfacesPathURL);
@@ -277,61 +272,51 @@ static Boolean
 _SCNetworkConfigurationMakePathIfNeeded(CFURLRef pathURL)
 {
 	char    *c;
-	mode_t  newmask;
 	char	path[PATH_MAX];
-	char    thepath[PATH_MAX];
-	CFIndex slen=0;
-	struct stat sb;
-	Boolean success = FALSE;
+	Boolean success		= FALSE;
 
 	if (!CFURLGetFileSystemRepresentation(pathURL, TRUE, (UInt8 *)path, sizeof(path))) {
 		SC_log(LOG_NOTICE, "Cannot get file system representation for url: %@", pathURL);
 		return success;
 	}
+
 	SC_log(LOG_INFO, "creating path: %s", path);
 
-	newmask = S_IRWXU | S_IRGRP | S_IROTH | S_IXGRP | S_IXOTH;
-
-	slen = strlen(path);
-
-	strlcpy(thepath, path, slen+1);
-	c = thepath;
-	if (*c == '/')
-		c++;
-	for(; !success; c++){
+	c = path;
+	if (*c == '/') {
+		c++;	// skip leading /
+	}
+	for(; !success; c++) {
 		if ((*c == '/') || (*c == '\0')){
-			if (*c == '\0')
+			if (*c == '\0') {
 				success = TRUE;
-			else
+			} else {
 				*c = '\0';
-			if (mkdir(thepath, newmask)){
-				if (errno == EEXIST || errno == EISDIR){
-					if (stat(thepath, &sb) < 0){
-						SC_log(LOG_ERR, "stat returned value < 0");
-						break;
-					}
-				} else {
-					SC_log(LOG_ERR, "received error: %s", strerror(errno));
+			}
+			if (mkdir(path, (S_IRWXU | S_IRGRP | S_IROTH | S_IXGRP | S_IXOTH)) != 0) {
+				if ((errno != EEXIST) && (errno != EISDIR)) {
+					SC_log(LOG_NOTICE, "mkdir(%s) failed: %s", path, strerror(errno));
 					break;
 				}
 			}
 			*c = '/';
 		}
 	}
+
 	return success;
 }
 
-static SCPreferencesRef
-__SCNetworkCreateDefaultPref(CFStringRef prefsID)
+static void
+__SCNetworkPopulateDefaultPrefs(SCPreferencesRef prefs)
 {
-	SCPreferencesRef prefs;
-	SCNetworkSetRef currentSet;
-	CFStringRef model;
+	SCNetworkSetRef	currentSet;
+	CFStringRef	model;
+	CFNumberRef	version;
 
-	prefs = SCPreferencesCreate(NULL, PLUGIN_ID, prefsID);
-	if (prefs == NULL) {
-		return NULL;
-	}
+	SC_log(LOG_INFO,
+	       "Populating preferences.plist"
+	       "\n  %@",
+	       prefs);
 
 	currentSet = SCNetworkSetCopyCurrent(prefs);
 	if (currentSet == NULL) {
@@ -346,35 +331,42 @@ __SCNetworkCreateDefaultPref(CFStringRef prefsID)
 		SCPreferencesSetValue(prefs, MODEL, model);
 	}
 
-	return prefs;
+	version = SCPreferencesGetValue(prefs, kSCPrefVersion);
+	if (version == NULL) {
+		const int	new_version	= NETWORK_CONFIGURATION_VERSION;
+
+		version = CFNumberCreate(NULL, kCFNumberIntType, &new_version);
+		SCPreferencesSetValue(prefs, kSCPrefVersion, version);
+		CFRelease(version);
+	}
+
+	return;
 }
 
-__private_extern__
-SCPreferencesRef
-__SCNetworkCreateDefaultNIPrefs(CFStringRef prefsID)
+static void
+__SCNetworkPopulateDefaultNIPrefs(SCPreferencesRef ni_prefs)
 {
-	CFMutableArrayRef interfaces = NULL;
-	CFStringRef model;
-	CFArrayRef networkInterfaces;
-	SCPreferencesRef ni_prefs;
-	CFComparisonResult res;
+	CFMutableArrayRef	interfaces	= NULL;
+	CFStringRef		model;
+	CFArrayRef		networkInterfaces;
+	CFComparisonResult	res;
+	CFNumberRef		version;
+
+	interfaces = (CFMutableArrayRef)SCPreferencesGetValue(ni_prefs, INTERFACES);
+	if (isA_CFArray(interfaces)) {
+		// if already populated
+		return;
+	}
+
+	SC_log(LOG_INFO,
+	       "Populating NetworkInterfaces.plist"
+	       "\n  %@",
+	       ni_prefs);
 
 	networkInterfaces = __SCNetworkInterfaceCopyAll_IONetworkInterface(TRUE);
 	if (networkInterfaces == NULL) {
-		SC_log(LOG_NOTICE, "networkInterfaces is NULL");
-		return NULL;
-	}
-
-	if (prefsID == NULL) {
-		prefsID = CFStringCreateWithFormat(NULL, NULL, CFSTR("%@/%@"), PREFS_DEFAULT_DIR, NETWORK_INTERFACES_PREFS);
-	} else {
-		CFRetain(prefsID);
-	}
-	ni_prefs = SCPreferencesCreate(NULL, PLUGIN_ID, prefsID);
-	CFRelease(prefsID);
-	if (ni_prefs == NULL) {
-		SC_log(LOG_NOTICE, "ni_prefs is NULL");
-		goto done;
+		SC_log(LOG_NOTICE, "Cannot populate NetworkInterfaces.plist, no network interfaces");
+		return;
 	}
 
 	interfaces = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
@@ -384,15 +376,15 @@ __SCNetworkCreateDefaultNIPrefs(CFStringRef prefsID)
 		CFNumberRef if_type;
 		CFNumberRef if_unit;
 		SCNetworkInterfaceRef interface = CFArrayGetValueAtIndex(networkInterfaces, idx);
-		CFDictionaryRef interfaceEntity = __SCNetworkInterfaceCopyStorageEntity(interface);
+		CFDictionaryRef interfaceEntity;
 
+		interfaceEntity = __SCNetworkInterfaceCopyStorageEntity(interface);
 		if (interfaceEntity == NULL) {
 			continue;
 		}
 
 		if_type = _SCNetworkInterfaceGetIOInterfaceType(interface);
 		if_unit = _SCNetworkInterfaceGetIOInterfaceUnit(interface);
-
 		if ((if_type == NULL) || (if_unit == NULL)) {
 			CFRelease(interfaceEntity);
 			continue;
@@ -417,22 +409,28 @@ __SCNetworkCreateDefaultNIPrefs(CFStringRef prefsID)
 		CFRelease(interfaceEntity);
 
 	}
+
 	SCPreferencesSetValue(ni_prefs, INTERFACES, interfaces);
+	CFRelease(interfaces);
 
 	model = SCPreferencesGetValue(ni_prefs, MODEL);
 	if (model == NULL) {
 		model = _SC_hw_model(FALSE);
 		SCPreferencesSetValue(ni_prefs, MODEL, model);
 	}
-done:
-	if (interfaces != NULL) {
-		CFRelease(interfaces);
-	}
-	if (networkInterfaces != NULL) {
-		CFRelease(networkInterfaces);
+
+	version = SCPreferencesGetValue(ni_prefs, kSCPrefVersion);
+	if (version == NULL) {
+		const int	new_version	= NETWORK_CONFIGURATION_VERSION;
+
+		version = CFNumberCreate(NULL, kCFNumberIntType, &new_version);
+		SCPreferencesSetValue(ni_prefs, kSCPrefVersion, version);
+		CFRelease(version);
 	}
 
-	return ni_prefs;
+	CFRelease(networkInterfaces);
+
+	return;
 }
 
 
@@ -444,36 +442,44 @@ CFArrayRef
 _SCNetworkConfigurationPerformMigration(CFURLRef sourceDir, CFURLRef currentDir, CFURLRef targetDir, CFDictionaryRef options)
 {
 #pragma unused(options)
-	CFURLRef currentDirConfig = NULL;
-	CFURLRef currentSystemPath = NULL;
-	Boolean migrationComplete = FALSE;
-	CFArrayRef paths = NULL;
-	Boolean removeTargetOnFailure = FALSE;
-	CFURLRef sourceDirConfig = NULL;
-	CFURLRef targetDirConfig = NULL;
+	CFURLRef	currentDirConfig	= NULL;
+	CFURLRef	currentSystemPath	= NULL;
+	Boolean		migrationComplete	= FALSE;
+	CFArrayRef	paths			= NULL;
+	Boolean		removeTargetOnFailure	= FALSE;
+	CFURLRef	sourceDirConfig		= NULL;
+	CFURLRef	targetDirConfig		= NULL;
 
-	if (_SC_isInstallEnvironment()) {
-		_sc_debug = 1;
-	}
+	SC_log(LOG_INFO,
+	       "Perform Migration%s"
+	       "\n  sourceDir  = %@"
+	       "\n  currentDir = %@"
+	       "\n  targetDir  = %@"
+	       "\n  options    = %@",
+	       _SC_isInstallEnvironment() ? " (INSTALLER ENVIRONMENT)" : "",
+	       sourceDir,
+	       currentDir,
+	       targetDir,
+	       options != NULL ? options : (CFDictionaryRef)CFSTR("None"));
 
 	if ((sourceDir != NULL) && !CFURLHasDirectoryPath(sourceDir)) {
-		SC_log(LOG_INFO, "sourceDir is not a directory: %@", sourceDir);
+		SC_log(LOG_NOTICE, "Migration source is not a directory: %@", sourceDir);
 		goto done;
 	}
 
 	if ((currentDir != NULL) && !CFURLHasDirectoryPath(currentDir)) {
-		SC_log(LOG_INFO, "currentDir is not a directory: %@", currentDir);
+		SC_log(LOG_NOTICE, "Migration current is not a directory: %@", currentDir);
 		goto done;
 	}
 
 	if ((targetDir != NULL) && !CFURLHasDirectoryPath(targetDir)) {
-		SC_log(LOG_INFO, "targetDir is not a directory: %@", targetDir);
+		SC_log(LOG_NOTICE, "Migration target is not a directory: %@", targetDir);
 		goto done;
 	}
 
 	// Both sourceDir and currentDir cannot be NULL because NULL value indicates using current system
 	if (sourceDir == NULL && currentDir == NULL) {
-		SC_log(LOG_INFO, "Both sourceDir and currentDir are NULL");
+		SC_log(LOG_NOTICE, "Both migration source and current are NULL");
 		goto done;
 	}
 
@@ -485,32 +491,44 @@ _SCNetworkConfigurationPerformMigration(CFURLRef sourceDir, CFURLRef currentDir,
 	if (sourceDir == NULL) {
 		sourceDirConfig = CFRetain(currentSystemPath);
 	} else {
-		sourceDirConfig = CFURLCreateWithFileSystemPathRelativeToBase(NULL, PREFS_DEFAULT_DIR_RELATIVE, kCFURLPOSIXPathStyle, TRUE, sourceDir);
+		sourceDirConfig = CFURLCreateWithFileSystemPathRelativeToBase(NULL,
+									      PREFS_DEFAULT_DIR_RELATIVE,
+									      kCFURLPOSIXPathStyle,
+									      TRUE,
+									      sourceDir);
 	}
 
 	if (currentDir != NULL) {
-		currentDirConfig = CFURLCreateWithFileSystemPathRelativeToBase(NULL, PREFS_DEFAULT_DIR_RELATIVE, kCFURLPOSIXPathStyle, TRUE, currentDir);
+		currentDirConfig = CFURLCreateWithFileSystemPathRelativeToBase(NULL,
+									       PREFS_DEFAULT_DIR_RELATIVE,
+									       kCFURLPOSIXPathStyle,
+									       TRUE,
+									       currentDir);
 	}
 	// If the targetDir is not provided then migration will take place in currentDir
 	if (targetDir == NULL) {
 		targetDirConfig = CFRetain(currentSystemPath);
 	} else {
-		targetDirConfig = CFURLCreateWithFileSystemPathRelativeToBase(NULL, PREFS_DEFAULT_DIR_RELATIVE, kCFURLPOSIXPathStyle, TRUE, targetDir);
+		targetDirConfig = CFURLCreateWithFileSystemPathRelativeToBase(NULL,
+									      PREFS_DEFAULT_DIR_RELATIVE,
+									      kCFURLPOSIXPathStyle,
+									      TRUE,
+									      targetDir);
 	}
-	// Source directory cannot be the same as Target Directory
+	// Source directory cannot be the same as target directory
 	if (CFEqual(sourceDirConfig, targetDirConfig)) {
-		SC_log(LOG_INFO, "Source directory cannot be the same as target directory");
+		SC_log(LOG_NOTICE, "Source directory cannot be the same as target directory");
 		goto done;
 	}
 
 	if ((currentDirConfig == NULL) || !CFEqual(currentDirConfig, targetDirConfig)) {
 		if (!_SCNetworkConfigurationMakePathIfNeeded(targetDirConfig)) {
-			SC_log(LOG_INFO, "Could not create target directory");
+			SC_log(LOG_NOTICE, "Could not create target directory");
 			goto done;
 		}
 
 		if (!SCNetworkConfigurationCopyConfigurationFiles(currentDirConfig, targetDirConfig)) {
-			SC_log(LOG_INFO, "Could not copy configuration files from \"%@\" to \"%@\"",
+			SC_log(LOG_NOTICE, "Could not copy configuration files from \"%@\" to \"%@\"",
 			       currentDirConfig,
 			       targetDirConfig);
 		} else if (currentDirConfig != NULL) {
@@ -523,7 +541,7 @@ _SCNetworkConfigurationPerformMigration(CFURLRef sourceDir, CFURLRef currentDir,
 
 	// If both source and current configurations point to current system, then no migration needs to be done.
 	if ((currentDirConfig != NULL) && CFEqual(sourceDirConfig, currentDirConfig)) {
-		SC_log(LOG_INFO, "No migration needed, source and current configurations point to same path");
+		SC_log(LOG_NOTICE, "No migration needed, source and current configurations have the same path");
 		migrationComplete = TRUE;
 	} else {
 		migrationComplete = _SCNetworkConfigurationMigrateConfiguration(sourceDirConfig, targetDirConfig);
@@ -534,7 +552,7 @@ _SCNetworkConfigurationPerformMigration(CFURLRef sourceDir, CFURLRef currentDir,
 	} else {
 		SC_log(LOG_NOTICE, "Migration failed: %s", SCErrorString(SCError()));
 
-		// If migration fails, then remove configuration files from target config if they are
+		// If migration fails, then remove configuration files from target config if they were
 		// copied from the current directory
 		if (removeTargetOnFailure) {
 			_SCNetworkConfigurationRemoveConfigurationFiles(targetDirConfig);
@@ -553,19 +571,20 @@ done:
 	if (targetDirConfig != NULL) {
 		CFRelease(targetDirConfig);
 	}
+
 	return paths;
 }
 
 static Boolean
 _SCNetworkConfigurationMigrateIsFilePresent(CFURLRef filePath)
 {
-	Boolean fileExists = false;
-	char filePathStr[PATH_MAX];
-	int statResult = 0;
-	struct stat statStruct = {0, };
+	Boolean		fileExists	= false;
+	char		filePathStr[PATH_MAX];
+	int		statResult	= 0;
+	struct stat	statStruct	= { 0, };
 
 	if (filePath == NULL) {
-		SC_log(LOG_DEBUG, "filePath is NULL");
+		SC_log(LOG_NOTICE, "_SCNetworkConfigurationMigrateIsFilePresent: No path");
 		goto done;
 	}
 
@@ -576,48 +595,69 @@ _SCNetworkConfigurationMigrateIsFilePresent(CFURLRef filePath)
 
 	statResult = stat(filePathStr, &statStruct);
 	if (statResult == 0) {
-		fileExists = TRUE;
+		SCPreferencesRef	prefs;
+		CFStringRef		prefsID;
+
+		if (statStruct.st_size == 0) {
+			SC_log(LOG_INFO, "_SCNetworkConfigurationMigrateIsFilePresent: empty .plist: %@", filePath);	// REMOVE
+			goto done;
+		}
+
+		prefsID = CFStringCreateWithCString(NULL, filePathStr, kCFStringEncodingUTF8);
+		prefs = SCPreferencesCreate(NULL, PLUGIN_ID, prefsID);
+		CFRelease(prefsID);
+		if (prefs == NULL) {
+			SC_log(LOG_NOTICE, "_SCNetworkConfigurationMigrateIsFilePresent: bad .plist: %@", filePath);
+			goto done;
+		}
+
+		if (!__SCPreferencesIsEmpty(prefs)) {
+			// if non-empty .plist
+			fileExists = TRUE;
+		} else {
+			SC_log(LOG_NOTICE, "_SCNetworkConfigurationMigrateIsFilePresent: effectively empty .plist: %@", filePath);
+		}
+
+		CFRelease(prefs);
 	}
 done:
 	return fileExists;
 }
 
 static Boolean
-__SCNetworkConfigurationMigrateConfigurationFilesPresent(CFURLRef baseURL, CFArrayRef* migrationPaths)
+__SCNetworkConfigurationMigrateConfigurationFilesPresent(CFURLRef baseURL, CFArrayRef* migrationPaths, Boolean expected)
 {
-	Boolean configFilesPresent = FALSE;
-	CFIndex count;
-	CFURLRef filePath = NULL;
-	CFURLRef interfaces;
-	CFMutableArrayRef migrationPathsMutable = NULL;
-	CFURLRef prefs;
+	Boolean			configFilesPresent	= FALSE;
+	CFIndex			count;
+	CFURLRef		filePath		= NULL;
+	CFURLRef		interfaces;
+	CFMutableArrayRef	migrationPathsMutable	= NULL;
+	CFURLRef		prefs;
 
 	if (baseURL == NULL) {
-		SC_log(LOG_INFO, "No base migration URL");
+		SC_log(LOG_NOTICE, "No base migration URL");
 		goto done;
 	}
 
-	_SCNetworkConfigurationCopyMigrationPathsWithBaseURL(baseURL, &prefs, &interfaces);
-
 	migrationPathsMutable = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
-	CFArrayInsertValueAtIndex(migrationPathsMutable, PREFERENCES_PLIST_INDEX, prefs);
-	CFArrayInsertValueAtIndex(migrationPathsMutable, NETWORK_INTERFACES_PLIST_INDEX, interfaces);
-
+	_SCNetworkConfigurationCopyMigrationPathsWithBaseURL(baseURL, &prefs, &interfaces);
+	CFArrayAppendValue(migrationPathsMutable, prefs);
+	CFArrayAppendValue(migrationPathsMutable, interfaces);
 	CFRelease(prefs);
 	CFRelease(interfaces);
 
 	*migrationPaths = migrationPathsMutable;
 
-	if ((*migrationPaths == NULL) ||
-	    ((count = CFArrayGetCount(*migrationPaths)) == 0)) {
-		SC_log(LOG_INFO, "No migration paths");
-		goto done;
-	}
-
+	count = CFArrayGetCount(*migrationPaths);
 	for (CFIndex idx = 0; idx < count; idx++) {
+		Boolean		present;
+
 		filePath = CFArrayGetValueAtIndex(*migrationPaths, idx);
-		if (!_SCNetworkConfigurationMigrateIsFilePresent(filePath)) {
-			SC_log(LOG_INFO, "Required migration file not present: %@", filePath);
+		present = _SCNetworkConfigurationMigrateIsFilePresent(filePath);
+		if (!present) {
+			if (expected) {
+				SC_log(LOG_INFO, "Expected migration file not present: %@", filePath);
+			}
 			goto done;
 		}
 	}
@@ -631,27 +671,31 @@ done:
 static CFMutableArrayRef
 _SCNetworkInterfaceCopyInterfacesFilteredByBuiltinWithPreferences(SCPreferencesRef ni_prefs, Boolean isBuiltin)
 {
-	CFIndex count = 0;
-	SCNetworkInterfaceRef interface;
-	CFArrayRef interfaceList = NULL;
-	CFMutableArrayRef resultInterfaceList = NULL;
+	CFIndex			count			= 0;
+	SCNetworkInterfaceRef	interface;
+	CFArrayRef		interfaceList		= NULL;
+	SCPreferencesRef	prefs			= NULL;
+	CFMutableArrayRef	resultInterfaceList	= NULL;
 
 	interfaceList = __SCNetworkInterfaceCopyStoredWithPreferences(ni_prefs);
 	if (interfaceList == NULL) {
-		SC_log(LOG_INFO, "No interfaces");
 		goto done;
 	}
 
 	count = CFArrayGetCount(interfaceList);
 	if (count > 0) {
 		resultInterfaceList = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+		prefs = SCPreferencesCreateCompanion(ni_prefs, NULL);
 	}
 
 	for (CFIndex i = 0; i < count; i++) {
 		interface = CFArrayGetValueAtIndex(interfaceList, i);
-
 		if (_SCNetworkInterfaceIsBuiltin(interface) == isBuiltin) {
-			CFArrayAppendValue(resultInterfaceList, interface);
+			SCNetworkInterfacePrivateRef	newInterface;
+
+			newInterface = __SCNetworkInterfaceCreateCopy(NULL, interface, prefs, NULL);
+			CFArrayAppendValue(resultInterfaceList, newInterface);
+			CFRelease(newInterface);
 		}
 	}
 
@@ -659,19 +703,22 @@ done:
 	if (interfaceList != NULL) {
 		CFRelease(interfaceList);
 	}
+	if (prefs != NULL) {
+		CFRelease(prefs);
+	}
 	return resultInterfaceList;
 }
 
 static CFMutableDictionaryRef
 _SCNetworkInterfaceStorageCopyMaxUnitPerInterfaceType(SCPreferencesRef ni_prefs)
 {
-	CFNumberRef cfMaxUnit;
-	CFIndex count = 0;
-	CFArrayRef ifList = NULL;
-	SCNetworkInterfaceRef interface;
-	CFMutableDictionaryRef interfaceTypeToMaxUnitMapping = NULL;
-	CFNumberRef type;
-	CFNumberRef unit;
+	CFNumberRef		cfMaxUnit;
+	CFIndex			count				= 0;
+	CFArrayRef		ifList				= NULL;
+	SCNetworkInterfaceRef	interface;
+	CFMutableDictionaryRef	interfaceTypeToMaxUnitMapping	= NULL;
+	CFNumberRef		type;
+	CFNumberRef		unit;
 
 	ifList = __SCNetworkInterfaceCopyStoredWithPreferences(ni_prefs);
 	if (ifList == NULL) {
@@ -680,14 +727,14 @@ _SCNetworkInterfaceStorageCopyMaxUnitPerInterfaceType(SCPreferencesRef ni_prefs)
 	}
 
 	interfaceTypeToMaxUnitMapping = CFDictionaryCreateMutable(NULL, 0,
-								    &kCFTypeDictionaryKeyCallBacks,
-								    &kCFTypeDictionaryValueCallBacks);
+								  &kCFTypeDictionaryKeyCallBacks,
+								  &kCFTypeDictionaryValueCallBacks);
 	count = CFArrayGetCount(ifList);
 	for (CFIndex idx = 0; idx < count; idx++) {
 		cfMaxUnit = NULL;
 		interface = CFArrayGetValueAtIndex(ifList, idx);
 
-		if (isA_SCNetworkInterface(interface) == NULL) {
+		if (!isA_SCNetworkInterface(interface)) {
 			continue;
 		}
 
@@ -726,31 +773,58 @@ _SCNetworkInterfaceStorageCopyMaxUnitPerInterfaceType(SCPreferencesRef ni_prefs)
 static CFMutableDictionaryRef
 _SCNetworkConfigurationCopyBuiltinMapping (SCPreferencesRef sourcePrefs, SCPreferencesRef targetPrefs)
 {
-	CFMutableDictionaryRef builtinMapping = NULL;
-	CFIndex sourceBuiltinInterfaceCount = 0;
-	CFMutableArrayRef sourceBuiltinInterfaces = NULL;
-	SCNetworkInterfaceRef sourceInterface;
-	CFIndex targetBuiltinInterfaceCount = 0;
-	CFMutableArrayRef targetBuiltinInterfaces = NULL;
-	SCNetworkInterfaceRef targetInterface;
+	CFMutableDictionaryRef	builtinMapping			= NULL;
+	CFIndex			sourceBuiltinInterfaceCount	= 0;
+	CFMutableArrayRef	sourceBuiltinInterfaces		= NULL;
+	SCNetworkInterfaceRef	sourceInterface;
+	CFIndex			targetBuiltinInterfaceCount	= 0;
+	CFMutableArrayRef	targetBuiltinInterfaces		= NULL;
+	SCNetworkInterfaceRef	targetInterface;
 
 	sourceBuiltinInterfaces = _SCNetworkInterfaceCopyInterfacesFilteredByBuiltinWithPreferences(sourcePrefs, TRUE);
-	if (isA_CFArray(sourceBuiltinInterfaces) == NULL) {
+	if (!isA_CFArray(sourceBuiltinInterfaces)) {
 		SC_log(LOG_INFO, "No source built-in interfaces");
 		goto done;
 	}
 	sourceBuiltinInterfaceCount = CFArrayGetCount(sourceBuiltinInterfaces);
 
 	targetBuiltinInterfaces = _SCNetworkInterfaceCopyInterfacesFilteredByBuiltinWithPreferences(targetPrefs, TRUE);
-	if (isA_CFArray(targetBuiltinInterfaces) == NULL) {
+	if (!isA_CFArray(targetBuiltinInterfaces)) {
 		SC_log(LOG_INFO, "No target built-in interfaces");
 		goto done;
 	}
-	targetBuiltinInterfaceCount = CFArrayGetCount(targetBuiltinInterfaces);
 
 	// Builtin Mapping will try to map all source interfaces into target interfaces
 	for (CFIndex idx = 0; idx < sourceBuiltinInterfaceCount; idx++) {
+		Boolean		matched	= FALSE;
+
 		sourceInterface = CFArrayGetValueAtIndex(sourceBuiltinInterfaces, idx);
+		targetBuiltinInterfaceCount = CFArrayGetCount(targetBuiltinInterfaces);
+
+		for (CFIndex idx2 = 0; idx2 < targetBuiltinInterfaceCount; idx2++) {
+			CFDataRef	sourceHardwareAddress;
+			CFDataRef	targetHardwareAddress;
+
+			targetInterface = CFArrayGetValueAtIndex(targetBuiltinInterfaces, idx2);
+			sourceHardwareAddress = _SCNetworkInterfaceGetHardwareAddress(sourceInterface);
+			targetHardwareAddress = _SCNetworkInterfaceGetHardwareAddress(targetInterface);
+			if (_SC_CFEqual(sourceHardwareAddress, targetHardwareAddress)) {
+				if (builtinMapping == NULL) {
+					builtinMapping = CFDictionaryCreateMutable(NULL, 0,
+										   &kCFTypeDictionaryKeyCallBacks,
+										   &kCFTypeDictionaryValueCallBacks);
+				}
+				CFDictionaryAddValue(builtinMapping, sourceInterface, targetInterface);
+				CFArrayRemoveValueAtIndex(targetBuiltinInterfaces, idx2);
+				matched = TRUE;
+				break;
+			}
+		}
+		if (matched) {
+			// proceed to next source interface
+			continue;
+		}
+
 		for (CFIndex idx2 = 0; idx2 < targetBuiltinInterfaceCount; idx2++) {
 			targetInterface = CFArrayGetValueAtIndex(targetBuiltinInterfaces, idx2);
 
@@ -765,7 +839,6 @@ _SCNetworkConfigurationCopyBuiltinMapping (SCPreferencesRef sourcePrefs, SCPrefe
 				break;
 			}
 		}
-		targetBuiltinInterfaceCount = CFArrayGetCount(targetBuiltinInterfaces);
 	}
 
 done:
@@ -778,25 +851,55 @@ done:
 	return builtinMapping;
 }
 
-static CFMutableDictionaryRef
-_SCNetworkConfigurationCopyExternalInterfaceMapping (SCPreferencesRef sourcePref, SCPreferencesRef targetPrefs)
+static Boolean
+isExcludedExternalInterface(SCNetworkInterfaceRef interface)
 {
-	CFNumberRef cfMaxTargetUnit = NULL;
-	CFNumberRef currentInterfaceUnit = NULL;
-	CFMutableDictionaryRef externalMapping = NULL;
-	CFMutableDictionaryRef interfaceTypeToMaxUnitMapping = NULL;
-	int maxTargetUnit;
-	int newTargetUnit;
-	CFIndex sourceExternalInterfaceCount = 0;
-	CFMutableArrayRef sourceExternalInterfaces = NULL;
-	SCNetworkInterfaceRef sourceInterface = NULL;
-	CFIndex targetExternalInterfaceCount = 0;
-	CFMutableArrayRef targetExternalInterfaces = NULL;
-	SCNetworkInterfaceRef targetInterface = NULL;
-	CFNumberRef type;
+	SCNetworkInterfacePrivateRef	interfacePrivate	= (SCNetworkInterfacePrivateRef)interface;
+#if	!TARGET_OS_SIMULATOR
+	int				vid;
+#endif	// !TARGET_OS_SIMULATOR
 
-	sourceExternalInterfaces = _SCNetworkInterfaceCopyInterfacesFilteredByBuiltinWithPreferences(sourcePref, FALSE);
-	if (isA_CFArray(sourceExternalInterfaces) == NULL) {
+	if (_SCNetworkInterfaceIsHiddenInterface(interface)) {
+		return TRUE;
+	}
+
+#if	!TARGET_OS_SIMULATOR
+	if (!isA_CFNumber(interfacePrivate->usb.vid) ||
+	    !CFNumberGetValue(interfacePrivate->usb.vid, kCFNumberIntType, &vid) ||
+	    (vid != kIOUSBAppleVendorID)) {
+		// if not "Apple" interface
+		return FALSE;
+	}
+#endif	// !TARGET_OS_SIMULATOR
+
+	if (_SC_CFEqual(interfacePrivate->name, CFSTR("iBridge"))) {
+		// exclude "Apple T2 Controller"
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+static CFMutableDictionaryRef
+_SCNetworkConfigurationCopyExternalInterfaceMapping (SCPreferencesRef sourceNIPrefs, SCPreferencesRef targetNIPrefs)
+{
+	CFNumberRef		cfMaxTargetUnit			= NULL;
+	CFNumberRef		currentInterfaceUnit		= NULL;
+	CFMutableDictionaryRef	externalMapping			= NULL;
+	CFMutableDictionaryRef	interfaceTypeToMaxUnitMapping	= NULL;
+	int			maxTargetUnit;
+	int			newTargetUnit;
+	CFIndex			sourceExternalInterfaceCount	= 0;
+	CFMutableArrayRef	sourceExternalInterfaces	= NULL;
+	SCNetworkInterfaceRef	sourceInterface			= NULL;
+	CFIndex			targetExternalInterfaceCount	= 0;
+	CFMutableArrayRef	targetExternalInterfaces	= NULL;
+	SCNetworkInterfaceRef	targetInterface			= NULL;
+	SCPreferencesRef	targetPrefs			= NULL;
+	CFNumberRef		type;
+
+	sourceExternalInterfaces = _SCNetworkInterfaceCopyInterfacesFilteredByBuiltinWithPreferences(sourceNIPrefs, FALSE);
+	if (!isA_CFArray(sourceExternalInterfaces)) {
 		SC_log(LOG_INFO, "No source external interfaces");
 		goto done;
 	}
@@ -806,20 +909,42 @@ _SCNetworkConfigurationCopyExternalInterfaceMapping (SCPreferencesRef sourcePref
 		goto done;
 	}
 
-	targetExternalInterfaces = _SCNetworkInterfaceCopyInterfacesFilteredByBuiltinWithPreferences(targetPrefs, FALSE);
-	if (isA_CFArray(targetExternalInterfaces) == NULL) {
+	targetExternalInterfaces = _SCNetworkInterfaceCopyInterfacesFilteredByBuiltinWithPreferences(targetNIPrefs, FALSE);
+	if (!isA_CFArray(targetExternalInterfaces)) {
 		SC_log(LOG_INFO, "No target external interfaces");
 		goto done;
 	}
 
-	interfaceTypeToMaxUnitMapping = _SCNetworkInterfaceStorageCopyMaxUnitPerInterfaceType(targetPrefs);
+	interfaceTypeToMaxUnitMapping = _SCNetworkInterfaceStorageCopyMaxUnitPerInterfaceType(targetNIPrefs);
 	externalMapping = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	targetPrefs = SCPreferencesCreateCompanion(targetNIPrefs, NULL);
 
 	// Map all external interfaces which exist in both source and target
 	for (CFIndex idx = 0; idx < sourceExternalInterfaceCount; idx++) {
+		Boolean		matched	= FALSE;
+
 		sourceInterface = CFArrayGetValueAtIndex(sourceExternalInterfaces, idx);
 		targetExternalInterfaceCount = CFArrayGetCount(targetExternalInterfaces);
 		currentInterfaceUnit = NULL;
+
+		for (CFIndex idx2 = 0; idx2 < targetExternalInterfaceCount; idx2++) {
+			CFDataRef	sourceHardwareAddress;
+			CFDataRef	targetHardwareAddress;
+
+			targetInterface = CFArrayGetValueAtIndex(targetExternalInterfaces, idx2);
+			sourceHardwareAddress = _SCNetworkInterfaceGetHardwareAddress(sourceInterface);
+			targetHardwareAddress = _SCNetworkInterfaceGetHardwareAddress(targetInterface);
+			if (_SC_CFEqual(sourceHardwareAddress, targetHardwareAddress)) {
+				CFDictionaryAddValue(externalMapping, sourceInterface, targetInterface);
+				CFArrayRemoveValueAtIndex(targetExternalInterfaces, idx2);
+				matched = TRUE;
+				break;
+			}
+		}
+		if (matched) {
+			// proceed to next source interface
+			continue;
+		}
 
 		for (CFIndex idx2 = 0; idx2 < targetExternalInterfaceCount; idx2++) {
 			targetInterface = CFArrayGetValueAtIndex(targetExternalInterfaces, idx2);
@@ -827,43 +952,55 @@ _SCNetworkConfigurationCopyExternalInterfaceMapping (SCPreferencesRef sourcePref
 			if (_SCNetworkConfigurationIsInterfaceNamerMappable(sourceInterface, targetInterface, TRUE)) {
 				CFDictionaryAddValue(externalMapping, sourceInterface, targetInterface);
 				CFArrayRemoveValueAtIndex(targetExternalInterfaces, idx2);
+				matched = TRUE;
 				break;
 			}
 		}
-
-		if (!CFDictionaryContainsKey(externalMapping, sourceInterface)) {
-			// Create new mappings for external source interfaces which don't exist in the target
-			type = _SCNetworkInterfaceGetIOInterfaceType(sourceInterface);
-
-			cfMaxTargetUnit = CFDictionaryGetValue(interfaceTypeToMaxUnitMapping, type);
-			if (cfMaxTargetUnit != NULL) {
-				CFNumberGetValue(cfMaxTargetUnit, kCFNumberIntType, &maxTargetUnit);
-				newTargetUnit = maxTargetUnit + 1;
-			} else {
-				newTargetUnit = 0;
-			}
-
-			cfMaxTargetUnit = CFNumberCreate(NULL, kCFNumberIntType, &newTargetUnit);
-			CFDictionarySetValue(interfaceTypeToMaxUnitMapping, type, cfMaxTargetUnit);
-
-			targetInterface = (SCNetworkInterfaceRef)__SCNetworkInterfaceCreateCopy(NULL, sourceInterface, NULL, NULL);
-
-			SC_log(LOG_DEBUG, "sourceInterface: %p, target Interface: %p", sourceInterface, targetInterface);
-
-			currentInterfaceUnit = _SCNetworkInterfaceGetIOInterfaceUnit(targetInterface);
-			if (!isA_CFNumber(currentInterfaceUnit) ||
-			    !CFEqual(currentInterfaceUnit, cfMaxTargetUnit)) {
-				// Update the interface unit
-				__SCNetworkInterfaceSetIOInterfaceUnit(targetInterface, cfMaxTargetUnit);
-			}
-
-			CFDictionaryAddValue(externalMapping, sourceInterface, targetInterface);
-
-			CFRelease(targetInterface);
-			targetInterface = NULL;
-			CFRelease(cfMaxTargetUnit);
-			cfMaxTargetUnit = NULL;
+		if (matched) {
+			// proceed to next source interface
+			continue;
 		}
+
+		// Before we create mapping for external source interfaces that do not exist
+		// in the target we need check for and handle some exclusions.
+		if (isExcludedExternalInterface(sourceInterface)) {
+			// if excluded
+			continue;
+		}
+
+		// Create new mappings for external source interfaces which don't exist in the target
+		type = _SCNetworkInterfaceGetIOInterfaceType(sourceInterface);
+
+		cfMaxTargetUnit = CFDictionaryGetValue(interfaceTypeToMaxUnitMapping, type);
+		if (cfMaxTargetUnit != NULL) {
+			CFNumberGetValue(cfMaxTargetUnit, kCFNumberIntType, &maxTargetUnit);
+			newTargetUnit = maxTargetUnit + 1;
+		} else {
+			newTargetUnit = 0;
+		}
+
+		cfMaxTargetUnit = CFNumberCreate(NULL, kCFNumberIntType, &newTargetUnit);
+		CFDictionarySetValue(interfaceTypeToMaxUnitMapping, type, cfMaxTargetUnit);
+
+		targetInterface = (SCNetworkInterfaceRef)__SCNetworkInterfaceCreateCopy(NULL,
+											sourceInterface,
+											targetPrefs,
+											NULL);
+
+		currentInterfaceUnit = _SCNetworkInterfaceGetIOInterfaceUnit(targetInterface);
+		if (!isA_CFNumber(currentInterfaceUnit) ||
+		    !CFEqual(currentInterfaceUnit, cfMaxTargetUnit)) {
+			// Update the interface unit
+			__SCNetworkInterfaceSetIOInterfaceUnit(targetInterface, cfMaxTargetUnit);
+		}
+
+		CFDictionaryAddValue(externalMapping, sourceInterface, targetInterface);
+
+		CFRelease(targetInterface);
+		targetInterface = NULL;
+		CFRelease(cfMaxTargetUnit);
+		cfMaxTargetUnit = NULL;
+
 	}
 done:
 	if (sourceExternalInterfaces != NULL) {
@@ -875,6 +1012,9 @@ done:
 	if (interfaceTypeToMaxUnitMapping != NULL) {
 		CFRelease(interfaceTypeToMaxUnitMapping);
 	}
+	if (targetPrefs != NULL) {
+		CFRelease(targetPrefs);
+	}
 	return externalMapping;
 }
 static Boolean
@@ -884,14 +1024,14 @@ static Boolean
 _SCNetworkConfigurationIsInterfaceNamerMappable(SCNetworkInterfaceRef interface1, SCNetworkInterfaceRef interface2, Boolean bypassActive)
 {
 #pragma unused(bypassActive)
-	Boolean interface1IsBuiltin;
-	CFStringRef interface1Prefix;
-	CFStringRef interface1Type;
-	CFStringRef interface1UserDefinedName;
-	Boolean interface2IsBuiltin;
-	CFStringRef interface2Prefix;
-	CFStringRef interface2Type;
-	CFStringRef interface2UserDefinedName;
+	Boolean		interface1IsBuiltin;
+	CFStringRef	interface1Prefix;
+	CFStringRef	interface1Type;
+	CFStringRef	interface1UserDefinedName;
+	Boolean		interface2IsBuiltin;
+	CFStringRef	interface2Prefix;
+	CFStringRef	interface2Type;
+	CFStringRef	interface2UserDefinedName;
 
 	if (interface1 == interface2) {
 		// No work needs to be done
@@ -941,12 +1081,11 @@ _SCNetworkConfigurationIsInterfaceNamerMappable(SCNetworkInterfaceRef interface1
 static Boolean
 __SCNetworkConfigurationInterfaceNameIsEquiv(CFStringRef interfaceName1, CFStringRef interfaceName2)
 {
-	CFStringRef interfaceArray[] = { CFSTR("iPhone"), CFSTR("iPad"), CFSTR("iPod"), CFSTR("AppleTV") };
-	const int interfaceCount = sizeof(interfaceArray) / sizeof(CFStringRef);
-	CFStringRef portSuffix = CFSTR(", Port 1");
+	CFStringRef	interfaceArray[]	= { CFSTR("iPhone"), CFSTR("iPad"), CFSTR("iPod"), CFSTR("AppleTV") };
+	const int	interfaceCount		= sizeof(interfaceArray) / sizeof(CFStringRef);
+	CFStringRef	portSuffix		= CFSTR(", Port 1");
 
-	if ((isA_CFString(interfaceName1) != NULL) &&
-	    (isA_CFString(interfaceName2) != NULL)) {
+	if ((isA_CFString(interfaceName1)) && (isA_CFString(interfaceName2))) {
 		if (!CFEqual(interfaceName1, interfaceName2)) {
 			// Check if we are looking at the WiFi interface
 			if ((CFEqual(interfaceName1, CFSTR("AirPort")) ||
@@ -988,41 +1127,41 @@ __SCNetworkConfigurationInterfaceNameIsEquiv(CFStringRef interfaceName1, CFStrin
 }
 
 typedef struct {
-	CFDictionaryRef interfaceMapping;
-	CFMutableArrayRef interfacesMissingServices;
-} SCNetworkConfigurationMissingServiceContext;
+	CFDictionaryRef		interfaceMapping;
+	CFMutableArrayRef	interfacesMissingServices;
+} missingServiceContext;
 
 typedef struct {
-	CFDictionaryRef bsdNameToBridgeServices;	// Mapping of BSD Name to SCBridgeInterfaceRef
-	CFDictionaryRef bsdNameToBondServices;		// Mapping of BSD Name to SCBondInterfaceRef
-	CFDictionaryRef bsdNameToVLANServices;		// Mapping of BSD Name to SCVLANInterfaceRef
-	CFDictionaryRef interfaceMapping;
-	Boolean* isValid;
-	CFMutableArrayRef interfaceToBeRemoved;	// SCNetworkInterfaceRef. Services containing the interface will be removed
-	CFMutableArrayRef interfaceToBeReplaced;// SCNetworkInterfaceRef. Services containing the interface will be replaced with default service
-	CFMutableArrayRef interfacePreserveServiceInformation; // SCNetworkInterfaceRef. Services containing the interface will be replaced with new service which has same configuration as the current service with issue.
-	CFMutableDictionaryRef bsdNameServiceProtocolPreserveMapping;
-	SCPreferencesRef prefs;
-	Boolean repair;
-} SCNetworkConfigurationValidityContext;
+	CFDictionaryRef		bsdNameToBridgeServices;	// Mapping of BSD Name to SCBridgeInterfaceRef
+	CFDictionaryRef		bsdNameToBondServices;		// Mapping of BSD Name to SCBondInterfaceRef
+	CFDictionaryRef		bsdNameToVLANServices;		// Mapping of BSD Name to SCVLANInterfaceRef
+	CFDictionaryRef		interfaceMapping;
+	Boolean*		isValid;
+	CFMutableArrayRef	interfaceToBeRemoved;		// SCNetworkInterfaceRef. Services containing the interface will be removed
+	CFMutableArrayRef	interfaceToBeReplaced;		// SCNetworkInterfaceRef. Services containing the interface will be replaced with default service
+	CFMutableArrayRef	interfacePreserveServiceInformation; // SCNetworkInterfaceRef. Services containing the interface will be replaced with new service which has same configuration as the current service with issue.
+	CFMutableDictionaryRef	bsdNameServiceProtocolPreserveMapping;
+	SCPreferencesRef	prefs;
+	Boolean			repair;
+} validityContext;
 
 static void
 _SCNetworkConfigurationValidateInterface (const void *key, const void *value, void *context)
 {
-	CFStringRef bsdName = (CFStringRef)key;
-	SCNetworkConfigurationValidityContext *ctx = (SCNetworkConfigurationValidityContext*)context;
-	CFDictionaryRef bsdNameToBridgeServices = ctx->bsdNameToBridgeServices;
-	CFDictionaryRef bsdNameToBondServices = ctx->bsdNameToBondServices;
-	CFDictionaryRef bsdNameToVLANServices = ctx->bsdNameToVLANServices;
-	SCNetworkInterfaceRef interface = NULL;
-	CFDictionaryRef interfaceMapping = ctx->interfaceMapping;
-	CFStringRef interfaceUserDefinedName = NULL;
-	Boolean repair = ctx->repair;
-	SCNetworkInterfaceRef serviceInterface = (SCNetworkInterfaceRef)value;
-	CFStringRef serviceInterfaceUserDefinedName = NULL;
-	CFMutableArrayRef interfaceToBeRemoved = ctx->interfaceToBeRemoved;
-	CFMutableArrayRef interfaceToBeReplaced = ctx->interfaceToBeReplaced;
-	CFMutableArrayRef interfacePreserveServiceInformation = ctx->interfacePreserveServiceInformation;
+	CFStringRef		bsdName					= (CFStringRef)key;
+	validityContext		*ctx					= (validityContext*)context;
+	CFDictionaryRef		bsdNameToBridgeServices			= ctx->bsdNameToBridgeServices;
+	CFDictionaryRef		bsdNameToBondServices			= ctx->bsdNameToBondServices;
+	CFDictionaryRef		bsdNameToVLANServices			= ctx->bsdNameToVLANServices;
+	SCNetworkInterfaceRef	interface				= NULL;
+	CFDictionaryRef		interfaceMapping			= ctx->interfaceMapping;
+	CFStringRef		interfaceUserDefinedName		= NULL;
+	Boolean			repair					= ctx->repair;
+	SCNetworkInterfaceRef	serviceInterface			= (SCNetworkInterfaceRef)value;
+	CFStringRef		serviceInterfaceUserDefinedName		= NULL;
+	CFMutableArrayRef	interfaceToBeRemoved			= ctx->interfaceToBeRemoved;
+	CFMutableArrayRef	interfaceToBeReplaced			= ctx->interfaceToBeReplaced;
+	CFMutableArrayRef	interfacePreserveServiceInformation	= ctx->interfacePreserveServiceInformation;
 
 	// No work needs to be done if we have already made determination that configuration somewhere is not valid,
 	// or we don't intend to repair invalid configuration.
@@ -1033,11 +1172,18 @@ _SCNetworkConfigurationValidateInterface (const void *key, const void *value, vo
 	// There is no interface present for the service
 	interface = CFDictionaryGetValue(interfaceMapping, bsdName);
 	if (interface == NULL) {
-		if ((((bsdNameToBridgeServices != NULL) && !CFDictionaryContainsKey(bsdNameToBridgeServices, bsdName))) &&
-		    (((bsdNameToBondServices != NULL) && !CFDictionaryContainsKey(bsdNameToBondServices, bsdName))) &&
-		    (((bsdNameToVLANServices != NULL) && !CFDictionaryContainsKey(bsdNameToVLANServices, bsdName)))) {
+		if (_SCNetworkInterfaceIsBluetoothPAN(serviceInterface)) {
+			// interface not expected, BT-PAN
+			return;
+		}
+
+		if (((bsdNameToBridgeServices != NULL) && !CFDictionaryContainsKey(bsdNameToBridgeServices, bsdName)) &&
+		    ((bsdNameToBondServices   != NULL) && !CFDictionaryContainsKey(bsdNameToBondServices  , bsdName)) &&
+		    ((bsdNameToVLANServices   != NULL) && !CFDictionaryContainsKey(bsdNameToVLANServices  , bsdName))) {
 			// Not a virtual interface
-			SC_log(LOG_INFO, "No real interface with BSD name (%@) for service", bsdName);
+			SC_log(LOG_NOTICE,
+			       "No interface with BSD name (%@) present for service",
+			       bsdName);
 
 			if (repair) {
 				CFArrayAppendValue(interfaceToBeRemoved, serviceInterface);
@@ -1052,14 +1198,18 @@ _SCNetworkConfigurationValidateInterface (const void *key, const void *value, vo
 	serviceInterfaceUserDefinedName = __SCNetworkInterfaceGetUserDefinedName(serviceInterface);
 
 	if (!__SCNetworkConfigurationInterfaceNameIsEquiv(interfaceUserDefinedName, serviceInterfaceUserDefinedName)) {
-		SC_log(LOG_INFO, "Interface user defined name (%@) doesn't match service/interface user defined name: %@",
+		SC_log(LOG_NOTICE,
+		       "Interface user defined name (%@) doesn't match service/interface user defined name: %@",
 		       interfaceUserDefinedName,
 		       serviceInterfaceUserDefinedName);
 		*ctx->isValid = FALSE;
 		// Check if the service interface name is set to localized key
 		if (isA_CFArray(interfacePreserveServiceInformation) != NULL &&
 		    __SCNetworkInterfaceMatchesName(interfaceUserDefinedName, serviceInterfaceUserDefinedName)) {
-			SC_log(LOG_NOTICE, "serviceInterfaceUserDefinedName: %@ is the localized key for interface name: %@", serviceInterfaceUserDefinedName, interfaceUserDefinedName);
+			SC_log(LOG_NOTICE,
+			       "serviceInterfaceUserDefinedName: %@ is the localized key for interface name: %@",
+			       serviceInterfaceUserDefinedName,
+			       interfaceUserDefinedName);
 			CFArrayAppendValue(interfacePreserveServiceInformation, serviceInterface);
 		}
 		// Add service interface to the interfaceToBeReplaced list
@@ -1076,11 +1226,11 @@ _SCNetworkConfigurationValidateInterface (const void *key, const void *value, vo
 static void
 _SCNetworkConfigurationCollectMissingService(const void *key, const void *value, void *context)
 {
-	CFStringRef bsdName = (CFStringRef)key;
-	SCNetworkConfigurationMissingServiceContext *ctx = (SCNetworkConfigurationMissingServiceContext*)context;
-	SCNetworkInterfaceRef interface = (SCNetworkInterfaceRef)value;
-	CFMutableArrayRef interfacesMissingServices = ctx->interfacesMissingServices;
-	CFDictionaryRef serviceInterfaceMapping = ctx->interfaceMapping;
+	CFStringRef		bsdName				= (CFStringRef)key;
+	missingServiceContext	*ctx				= (missingServiceContext*)context;
+	SCNetworkInterfaceRef	interface			= (SCNetworkInterfaceRef)value;
+	CFMutableArrayRef	interfacesMissingServices	= ctx->interfacesMissingServices;
+	CFDictionaryRef		serviceInterfaceMapping		= ctx->interfaceMapping;
 
 	if (!isA_SCNetworkInterface(interface) ||
 	    !_SCNetworkInterfaceIsBuiltin(interface)) {
@@ -1097,14 +1247,14 @@ static Boolean
 _SCNetworkConfigurationCreateBuiltinInterfaceServices(SCPreferencesRef pref,
 						      SCPreferencesRef ni_pref)
 {
-	SCNetworkConfigurationMissingServiceContext context;
-	SCNetworkInterfaceRef interface = NULL;
-	CFArrayRef interfaces = NULL;
-	CFMutableArrayRef interfacesWithoutService = NULL;
-	CFDictionaryRef mappingBSDNameToInterface = NULL;
-	CFDictionaryRef mappingServiceBSDNameToInterface = NULL;
-	CFIndex missingServiceCount = 0;
-	Boolean success = FALSE;
+	missingServiceContext	context;
+	SCNetworkInterfaceRef	interface				= NULL;
+	CFArrayRef		interfaces				= NULL;
+	CFMutableArrayRef	interfacesWithoutService		= NULL;
+	CFDictionaryRef		mappingBSDNameToInterface		= NULL;
+	CFDictionaryRef		mappingServiceBSDNameToInterface	= NULL;
+	CFIndex			missingServiceCount			= 0;
+	Boolean			success					= FALSE;
 
 	interfaces = __SCNetworkInterfaceCopyStoredWithPreferences(ni_pref);
 	if (interfaces == NULL) {
@@ -1114,18 +1264,18 @@ _SCNetworkConfigurationCreateBuiltinInterfaceServices(SCPreferencesRef pref,
 
 	mappingBSDNameToInterface = __SCNetworkInterfaceCreateMappingUsingBSDName(interfaces);
 	CFRelease(interfaces);
-	if (isA_CFDictionary(mappingBSDNameToInterface) == NULL) {
+	if (!isA_CFDictionary(mappingBSDNameToInterface)) {
 		goto done;
 	}
 
 	interfaces = __SCNetworkServiceCopyAllInterfaces(pref);
 	if (interfaces == NULL) {
-		SC_log(LOG_INFO, "No interfaces");
+		SC_log(LOG_NOTICE, "No [service] interfaces");
 		goto done;
 	}
 	mappingServiceBSDNameToInterface = __SCNetworkInterfaceCreateMappingUsingBSDName(interfaces);
 	CFRelease(interfaces);
-	if (isA_CFDictionary(mappingServiceBSDNameToInterface) == NULL) {
+	if (!isA_CFDictionary(mappingServiceBSDNameToInterface)) {
 		goto done;
 	}
 
@@ -1142,8 +1292,13 @@ _SCNetworkConfigurationCreateBuiltinInterfaceServices(SCPreferencesRef pref,
 	for (CFIndex idx = 0; idx < missingServiceCount; idx++) {
 		interface = CFArrayGetValueAtIndex(interfacesWithoutService, idx);
 
+		if (__SCNetworkInterfaceIsMember(pref, interface)) {
+			// if the interface is a member of a bond or bridge
+			continue;
+		}
+
 		if (!__SCNetworkServiceCreate(pref, interface, NULL)) {
-			SC_log(LOG_INFO, "Could not add service for interface: %@", interface);
+			SC_log(LOG_NOTICE, "Could not create service for interface: %@", interface);
 			success = FALSE;
 		}
 	}
@@ -1164,28 +1319,28 @@ done:
 static void
 add_service(const void *value, void *context)
 {
-	SCNetworkConfigurationValidityContext *ctx = (SCNetworkConfigurationValidityContext *)context;
-	SCNetworkSetRef currentSet = NULL;
-	Boolean enabled;
-	SCNetworkInterfaceRef interface = (SCNetworkInterfaceRef)value;
-	CFDictionaryRef bsdNameServiceProtocolMapping = ctx->bsdNameServiceProtocolPreserveMapping;
-	SCPreferencesRef prefs = ctx->prefs;
-	SCNetworkServiceRef service;
-	CFStringRef bsdName = SCNetworkInterfaceGetBSDName(interface);
-	CFArrayRef protocolArray = NULL;
+	validityContext		*ctx				= (validityContext *)context;
+	SCNetworkSetRef		currentSet			= NULL;
+	Boolean			enabled;
+	SCNetworkInterfaceRef	interface			= (SCNetworkInterfaceRef)value;
+	CFDictionaryRef		bsdNameServiceProtocolMapping	= ctx->bsdNameServiceProtocolPreserveMapping;
+	SCPreferencesRef	prefs				= ctx->prefs;
+	SCNetworkServiceRef	service;
+	CFStringRef		bsdName				= SCNetworkInterfaceGetBSDName(interface);
+	CFArrayRef		protocolArray			= NULL;
 
 	if (isA_CFString(bsdName)) {
 		protocolArray = CFDictionaryGetValue(bsdNameServiceProtocolMapping, bsdName);
 	}
 	service = SCNetworkServiceCreate(prefs, interface);
 	if (service == NULL) {
-		SC_log(LOG_INFO, "Could not create new service");
+		SC_log(LOG_NOTICE, "Could not create new service");
 		goto done;
 	}
 
 	if (!SCNetworkServiceEstablishDefaultConfiguration(service)) {
+		SC_log(LOG_NOTICE, "SCNetworkServiceEstablishDefaultConfiguration() failed");
 		SCNetworkServiceRemove(service);
-		SC_log(LOG_INFO, "SCNetworkServiceEstablishDefaultConfiguration() failed");
 		goto done;
 	}
 
@@ -1209,14 +1364,14 @@ add_service(const void *value, void *context)
 	// Add service to current set
 	currentSet = SCNetworkSetCopyCurrent(prefs);
 	if (currentSet == NULL) {
+		SC_log(LOG_NOTICE, "Could not find current set");
 		SCNetworkServiceRemove(service);
-		SC_log(LOG_INFO, "Could not find current set");
 		goto done;
 	}
 
 	if (!SCNetworkSetAddService(currentSet, service)) {
+		SC_log(LOG_NOTICE,  "Could not add service to current set");
 		SCNetworkServiceRemove(service);
-		SC_log(LOG_INFO,  "Could not add service to current set");
 		goto done;
 	}
 
@@ -1233,11 +1388,11 @@ add_service(const void *value, void *context)
 static void
 create_bsd_name_service_protocol_mapping(const void *value, void *context)
 {
-	SCNetworkConfigurationValidityContext *ctx = (SCNetworkConfigurationValidityContext *)context;
-	CFArrayRef interfacePreserveServiceInformation = ctx->interfacePreserveServiceInformation;
-	CFMutableDictionaryRef bsdNameServiceProtocolMapping = ctx->bsdNameServiceProtocolPreserveMapping;
-	SCNetworkInterfaceRef interface;
-	SCNetworkServiceRef service = (SCNetworkServiceRef)value;
+	validityContext		*ctx					= (validityContext *)context;
+	CFArrayRef		interfacePreserveServiceInformation	= ctx->interfacePreserveServiceInformation;
+	CFMutableDictionaryRef	bsdNameServiceProtocolMapping		= ctx->bsdNameServiceProtocolPreserveMapping;
+	SCNetworkInterfaceRef	interface;
+	SCNetworkServiceRef	service					= (SCNetworkServiceRef)value;
 
 	interface = SCNetworkServiceGetInterface(service);
 
@@ -1279,10 +1434,10 @@ create_bsd_name_service_protocol_mapping(const void *value, void *context)
 static void
 remove_service(const void *value, void *context)
 {
-	SCNetworkConfigurationValidityContext *ctx = (SCNetworkConfigurationValidityContext *)context;
-	SCNetworkInterfaceRef interface;
-	SCNetworkServiceRef service = (SCNetworkServiceRef)value;
-	CFArrayRef toBeRemoved = ctx->interfaceToBeRemoved;
+	validityContext		*ctx		= (validityContext *)context;
+	SCNetworkInterfaceRef	interface;
+	SCNetworkServiceRef	service		= (SCNetworkServiceRef)value;
+	CFArrayRef		toBeRemoved	= ctx->interfaceToBeRemoved;
 
 	interface = SCNetworkServiceGetInterface(service);
 
@@ -1291,61 +1446,16 @@ remove_service(const void *value, void *context)
 	}
 }
 
-static void
-_SCNetworkConfigurationSaveOldConfiguration(SCPreferencesRef prefs)
-{
-	CFAbsoluteTime absoluteTime;
-	CFCalendarRef currentCalendar;
-	int day;
-	int hour;
-	CFStringRef keyList[] = {
-			kSCPrefCurrentSet,
-			MODEL,
-			kSCPrefNetworkServices,
-			kSCPrefSets,
-			kSCPrefSystem,
-			kSCPrefVirtualNetworkInterfaces
-	};
-	CFIndex keyListCount;
-	int minute;
-	int month;
-	int second;
-	int year;
-
-	currentCalendar = CFCalendarCopyCurrent();
-	absoluteTime = CFAbsoluteTimeGetCurrent();
-
-	if (!CFCalendarDecomposeAbsoluteTime(currentCalendar, absoluteTime, "yMdHms",
-					     &year, &month, &day, &hour, &minute, &second)) {
-		SC_log(LOG_INFO, "CFCalendarDecomposeAbsoluteTime() failed");
-	}
-	keyListCount = (CFIndex)sizeof(keyList)/sizeof(CFStringRef);
-
-	for (CFIndex idx = 0; idx < keyListCount; idx++) {
-		CFStringRef newKey;
-		CFTypeRef value = SCPreferencesGetValue(prefs, keyList[idx]);
-
-		if (value != NULL) {
-			newKey = CFStringCreateWithFormat(NULL, NULL,
-							  CFSTR("%d-%d-%d %d:%d:%d : %@"),
-							  year, month, day, hour,
-							  minute, second, keyList[idx]);
-			SCPreferencesSetValue(prefs, newKey, value);
-			CFRelease(newKey);
-		}
-	}
-	CFRelease(currentCalendar);
-}
-
 static Boolean
-_SCNetworkConfigurationRepairUsingPreferences(SCPreferencesRef prefs,
-					      SCNetworkConfigurationValidityContext *context)
+_SCNetworkConfigurationRepairUsingPreferences(SCPreferencesRef	prefs,
+					      SCPreferencesRef	ni_prefs,
+					      validityContext	*context)
 {
-	CFIndex removeCount;
-	CFIndex replaceCount;
-	CFArrayRef serviceList;
-	CFArrayRef interfaceToBeRemoved = context->interfaceToBeRemoved;
-	CFArrayRef interfaceToBeReplaced = context->interfaceToBeReplaced;
+	CFIndex		removeCount;
+	CFIndex		replaceCount;
+	CFArrayRef	serviceList;
+	CFArrayRef	interfaceToBeRemoved	= context->interfaceToBeRemoved;
+	CFArrayRef	interfaceToBeReplaced	= context->interfaceToBeReplaced;
 
 	removeCount = CFArrayGetCount(interfaceToBeRemoved);
 	replaceCount = CFArrayGetCount(interfaceToBeReplaced);
@@ -1355,7 +1465,8 @@ _SCNetworkConfigurationRepairUsingPreferences(SCPreferencesRef prefs,
 		return FALSE;
 	}
 	// Backup current preferences before making changes
-	_SCNetworkConfigurationSaveOldConfiguration(prefs);
+	__SCNetworkConfigurationBackup(prefs, CFSTR("pre-repair"), prefs);
+	__SCNetworkConfigurationBackup(ni_prefs, CFSTR("pre-repair"), prefs);
 
 	serviceList = SCNetworkServiceCopyAll(prefs);
 	CFArrayApplyFunction(serviceList, CFRangeMake(0, CFArrayGetCount(serviceList)), create_bsd_name_service_protocol_mapping, context);
@@ -1368,15 +1479,15 @@ _SCNetworkConfigurationRepairUsingPreferences(SCPreferencesRef prefs,
 static void
 validate_bridge(const void *value, void *context)
 {
-	SCBridgeInterfaceRef bridge = (SCBridgeInterfaceRef) value;
-	CFArrayRef memberInterfaces = SCBridgeInterfaceGetMemberInterfaces(bridge);
-	CFMutableArrayRef memberInterfacesMutable = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
-	SCPreferencesRef ni_prefs = (SCPreferencesRef)context;
+	SCBridgeInterfaceRef	bridge			= (SCBridgeInterfaceRef)value;
+	CFArrayRef		memberInterfaces	= SCBridgeInterfaceGetMemberInterfaces(bridge);
+	CFMutableArrayRef	memberInterfacesMutable	= CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+	SCPreferencesRef	ni_prefs		= (SCPreferencesRef)context;
 
 	for (CFIndex idx = 0; idx < CFArrayGetCount(memberInterfaces); idx++) {
-		CFStringRef bsdName;
-		SCNetworkInterfaceRef interface = (SCNetworkInterfaceRef)CFArrayGetValueAtIndex(memberInterfaces, idx);
-		SCNetworkInterfaceRef memberInterface;
+		CFStringRef		bsdName;
+		SCNetworkInterfaceRef	interface	= (SCNetworkInterfaceRef)CFArrayGetValueAtIndex(memberInterfaces, idx);
+		SCNetworkInterfaceRef	memberInterface;
 
 		bsdName = SCNetworkInterfaceGetBSDName(interface);
 		if (bsdName == NULL) {
@@ -1392,26 +1503,27 @@ validate_bridge(const void *value, void *context)
 	}
 
 	if (CFArrayGetCount(memberInterfacesMutable) == 0) {
-		SC_log(LOG_INFO, "Removing invalid bridge configuration: %@", bridge);
+		SC_log(LOG_NOTICE, "Removing bridge w/no member interfaces: %@", bridge);
 		SCBridgeInterfaceRemove(bridge);
 	} else {
 		SCBridgeInterfaceSetMemberInterfaces(bridge, memberInterfacesMutable);
 	}
 	CFRelease(memberInterfacesMutable);
 }
+
 #if	!TARGET_OS_IPHONE
 static void
 validate_bond(const void *value, void *context)
 {
-	SCBondInterfaceRef bond = (SCBondInterfaceRef)value;
-	CFArrayRef memberInterfaces = SCBondInterfaceGetMemberInterfaces(bond);
-	CFMutableArrayRef memberInterfacesMutable = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
-	SCPreferencesRef ni_prefs = (SCPreferencesRef)context;
+	SCBondInterfaceRef	bond			= (SCBondInterfaceRef)value;
+	CFArrayRef		memberInterfaces	= SCBondInterfaceGetMemberInterfaces(bond);
+	CFMutableArrayRef	memberInterfacesMutable	= CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+	SCPreferencesRef	ni_prefs		= (SCPreferencesRef)context;
 
 	for (CFIndex idx = 0; idx < CFArrayGetCount(memberInterfaces); idx++) {
-		CFStringRef bsdName;
-		SCNetworkInterfaceRef interface = (SCNetworkInterfaceRef)CFArrayGetValueAtIndex(memberInterfaces, idx);
-		SCNetworkInterfaceRef memberInterface;
+		CFStringRef		bsdName;
+		SCNetworkInterfaceRef	interface	= (SCNetworkInterfaceRef)CFArrayGetValueAtIndex(memberInterfaces, idx);
+		SCNetworkInterfaceRef	memberInterface;
 
 		bsdName = SCNetworkInterfaceGetBSDName(interface);
 		if (bsdName == NULL) {
@@ -1427,7 +1539,7 @@ validate_bond(const void *value, void *context)
 	}
 
 	if (CFArrayGetCount(memberInterfacesMutable) == 0) {
-		SC_log(LOG_INFO, "Removing invalid bond configuration: %@", bond);
+		SC_log(LOG_NOTICE, "Removing bond w/no member interfaces: %@", bond);
 		SCBondInterfaceRemove(bond);
 	} else {
 		SCBondInterfaceSetMemberInterfaces(bond, memberInterfacesMutable);
@@ -1436,64 +1548,143 @@ validate_bond(const void *value, void *context)
 }
 #endif	// !TARGET_OS_IPHONE
 
+typedef struct {
+	SCPreferencesRef	prefs;
+	SCPreferencesRef	ni_prefs;
+#if	!TARGET_OS_IPHONE
+	CFArrayRef		bondInterfaces;
+#endif	// !TARGET_OS_IPHONE
+	CFArrayRef		bridgeInterfaces;
+} validate_prefs_context;
+
+static validate_prefs_context *
+validate_prefs_context_create(SCPreferencesRef prefs, SCPreferencesRef ni_prefs)
+{
+	validate_prefs_context	*context;
+
+	context = calloc(1, sizeof(validate_prefs_context));
+	context->prefs = prefs;
+	context->ni_prefs = ni_prefs;
+#if	!TARGET_OS_IPHONE
+	context->bondInterfaces = (CFArrayRef)kCFNull;
+#endif	// !TARGET_OS_IPHONE
+	context->bridgeInterfaces = (CFArrayRef)kCFNull;
+	return context;
+}
+
+static void
+validate_prefs_context_release(validate_prefs_context *context)
+{
+#if	!TARGET_OS_IPHONE
+	if ((context->bondInterfaces != NULL) && (context->bondInterfaces != (CFArrayRef)kCFNull)) {
+		CFRelease(context->bondInterfaces);
+	}
+#endif	// !TARGET_OS_IPHONE
+	if ((context->bridgeInterfaces != NULL) && (context->bridgeInterfaces != (CFArrayRef)kCFNull)) {
+		CFRelease(context->bridgeInterfaces);
+	}
+	free(context);
+}
+
+static Boolean
+interfaceArrayContainsBSDName(CFArrayRef interfaces, CFStringRef bsdName)
+{
+	Boolean	match	= FALSE;
+	CFIndex	n	= CFArrayGetCount(interfaces);
+
+	for (CFIndex i = 0; i < n; i++) {
+		SCNetworkInterfaceRef	interface;
+		CFStringRef		matchName;
+
+		interface = CFArrayGetValueAtIndex(interfaces, i);
+		matchName = SCNetworkInterfaceGetBSDName(interface);
+		if (_SC_CFEqual(bsdName, matchName)) {
+			match = TRUE;
+			break;
+		}
+	}
+
+	return match;
+}
+
 static void
 validate_vlan(const void *value, void *context)
 {
-	CFStringRef bsdName;
-	SCNetworkInterfaceRef interface;
-	Boolean isValid = TRUE;
-	SCPreferencesRef ni_prefs = (SCPreferencesRef)context;
-	SCNetworkInterfaceRef physicalInterface;
-	SCVLANInterfaceRef vlan = (SCVLANInterfaceRef)value;
+	CFStringRef		bsdName;
+	SCNetworkInterfaceRef	interface;
+	Boolean			isValid			= FALSE;
+	SCNetworkInterfaceRef	physicalInterface;
+	validate_prefs_context	*prefs			= (validate_prefs_context *)context;
+	SCVLANInterfaceRef	vlan			= (SCVLANInterfaceRef)value;
 
 	physicalInterface = SCVLANInterfaceGetPhysicalInterface(vlan);
 	bsdName = SCNetworkInterfaceGetBSDName(physicalInterface);
-
 	if (bsdName == NULL) {
-		isValid = FALSE;
 		goto done;
 	}
 
 	// Check if the physical interface is present
-	interface = __SCNetworkInterfaceCreateWithNIPreferencesUsingBSDName(NULL, ni_prefs, bsdName);
-	if (interface == NULL) {
-		isValid = FALSE;
+	interface = __SCNetworkInterfaceCreateWithNIPreferencesUsingBSDName(NULL, prefs->ni_prefs, bsdName);
+	if (interface != NULL) {
+		CFRelease(interface);
+		isValid = TRUE;
 		goto done;
 	}
-	CFRelease(interface);
 
-done:
+#if	!TARGET_OS_IPHONE
+	if (prefs->bondInterfaces == (CFArrayRef)kCFNull) {
+		prefs->bondInterfaces = SCBondInterfaceCopyAll(prefs->prefs);
+	}
+	if (prefs->bondInterfaces != NULL) {
+		isValid = interfaceArrayContainsBSDName(prefs->bondInterfaces, bsdName);
+		if (isValid) {
+			goto done;
+		}
+	}
+#endif	// !TARGET_OS_IPHONE
+
+	if (prefs->bridgeInterfaces == (CFArrayRef)kCFNull) {
+		prefs->bridgeInterfaces = SCBridgeInterfaceCopyAll(prefs->prefs);
+	}
+	if (prefs->bridgeInterfaces != NULL) {
+		isValid = interfaceArrayContainsBSDName(prefs->bridgeInterfaces, bsdName);
+		if (isValid) {
+			goto done;
+		}
+	}
+
+    done:
 	if (!isValid) {
-		SC_log(LOG_INFO, "Removing invalid VLAN configuration: %@", vlan);
+		SC_log(LOG_NOTICE, "Removing VLAN w/no physical interface: %@", vlan);
 		SCVLANInterfaceRemove(vlan);
 	}
 }
 
 Boolean
-_SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef prefs,
-						     SCPreferencesRef ni_prefs,
-						     CFDictionaryRef options)
+_SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef	prefs,
+						     SCPreferencesRef	ni_prefs,
+						     CFDictionaryRef	options)
 {
-	CFArrayRef allServices = NULL;
-	CFArrayRef allSets = NULL;
-	CFDictionaryRef bsdNameToBridgeServices = NULL;
-	CFDictionaryRef bsdNameToBondServices = NULL;
-	CFDictionaryRef bsdNameToVLANServices = NULL;
-	SCNetworkConfigurationValidityContext context;
-	CFArrayRef interfaces = NULL;
-	CFMutableArrayRef interfaceToBeRemoved = NULL;
-	CFMutableArrayRef interfaceToBeReplaced = NULL;
-	CFMutableArrayRef interfacePreserveServiceInformation = NULL;
-	CFMutableDictionaryRef bsdNameServiceProtocolPreserveMapping = NULL;
-	Boolean isValid = TRUE;
-	CFDictionaryRef mappingBSDNameToInterface = NULL;
-	CFDictionaryRef mappingServiceBSDNameToInterface = NULL;
-	CFStringRef  model = NULL;
-	CFStringRef ni_model = NULL;
-	Boolean repairConfiguration = FALSE;
-	Boolean revertLimitNetworkConfiguration = FALSE;
-	CFArrayRef setServiceOrder = NULL;
-	CFArrayRef setServices = NULL;
+	CFArrayRef		allServices				= NULL;
+	CFArrayRef		allSets					= NULL;
+	CFDictionaryRef		bsdNameToBridgeServices			= NULL;
+	CFDictionaryRef		bsdNameToBondServices			= NULL;
+	CFDictionaryRef		bsdNameToVLANServices			= NULL;
+	validityContext		context;
+	CFArrayRef		interfaces				= NULL;
+	CFMutableArrayRef	interfaceToBeRemoved			= NULL;
+	CFMutableArrayRef	interfaceToBeReplaced			= NULL;
+	CFMutableArrayRef	interfacePreserveServiceInformation	= NULL;
+	CFMutableDictionaryRef	bsdNameServiceProtocolPreserveMapping	= NULL;
+	Boolean			isValid					= TRUE;
+	CFDictionaryRef		mappingBSDNameToInterface		= NULL;
+	CFDictionaryRef		mappingServiceBSDNameToInterface	= NULL;
+	CFStringRef		model					= NULL;
+	CFStringRef		ni_model				= NULL;
+	Boolean			repairConfiguration			= FALSE;
+	Boolean			revertBypassSystemInterfaces		= FALSE;
+	CFArrayRef		setServiceOrder				= NULL;
+	CFArrayRef		setServices				= NULL;
 
 	if  ((isA_CFDictionary(options) != NULL)) {
 		CFBooleanRef repair = CFDictionaryGetValue(options, kSCNetworkConfigurationRepair);
@@ -1501,21 +1692,43 @@ _SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef prefs,
 			repairConfiguration = CFBooleanGetValue(repair);
 		}
 	}
-	if (!__SCPreferencesGetLimitSCNetworkConfiguration(prefs)) {
-		__SCPreferencesSetLimitSCNetworkConfiguration(prefs, TRUE);
-		revertLimitNetworkConfiguration = TRUE;
-	}
-	/*
 
+	SC_log(LOG_INFO,
+	       "%sbypassing system interfaces for %@",
+	       _SCNetworkConfigurationBypassSystemInterfaces(prefs) ? "" : "not ",
+	       prefs);
+
+	if (!_SCNetworkConfigurationBypassSystemInterfaces(prefs)) {
+		_SCNetworkConfigurationSetBypassSystemInterfaces(prefs, TRUE);
+		revertBypassSystemInterfaces = TRUE;
+	}
+
+	/*
 	 Check the validity by:
 	 - Comparing if the models are the same
 	 */
 	model = SCPreferencesGetValue(prefs, MODEL);
+	if (!isA_CFString(model)) {
+		SC_log(LOG_INFO,
+		       "Configuration validity check: no \"Model\" property in preferences.plist"
+		       "\n  %@",
+		       prefs);
+	}
 	ni_model = SCPreferencesGetValue(ni_prefs, MODEL);
-
-	if (isA_CFString(model) == NULL || isA_CFString(ni_model) == NULL || CFStringCompare(model, ni_model, 0) != kCFCompareEqualTo) {
+	if (!isA_CFString(ni_model)) {
+		SC_log(LOG_INFO,
+		       "Configuration validity check: no \"Model\" property in NetworkInterfaces.plist"
+		       "\n  %@",
+		       ni_prefs);
+	}
+	if (isA_CFString(model) && isA_CFString(ni_model) && !CFEqual(model, ni_model)) {
 		isValid = FALSE;
-		SC_log(LOG_INFO, "Model names do not match in preferences.plist and NetworkInterfaces.plist");
+		SC_log(LOG_NOTICE,
+		       "Configuration validity check: model names do not match!"
+		       "\n  %@"
+		       "\n  %@",
+		       prefs,
+		       ni_prefs);
 		goto done;
 	}
 
@@ -1526,17 +1739,22 @@ _SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef prefs,
 	 __SCNetworkInterfaceCreateMappingUsingBSDName(SCPreferencesRef prefs);
 	 */
 	interfaces = __SCNetworkInterfaceCopyStoredWithPreferences(ni_prefs);
-	if (!isA_CFArray(interfaces)) {
-		if (interfaces != NULL) CFRelease(interfaces);
-		SC_log(LOG_NOTICE, "No interfaces");
+	if (interfaces == NULL) {
+		SC_log(LOG_NOTICE,
+		       "Configuration validity check: no network interfaces!"
+		       "\n  %@",
+		       ni_prefs);
 		isValid = FALSE;
 		goto done;
 	}
 	mappingBSDNameToInterface = __SCNetworkInterfaceCreateMappingUsingBSDName(interfaces);
 	CFRelease(interfaces);
-	if (isA_CFDictionary(mappingBSDNameToInterface) == NULL) {
+	if (!isA_CFDictionary(mappingBSDNameToInterface)) {
 		isValid = FALSE;
-		SC_log(LOG_INFO, "No BSD name to interface mapping");
+		SC_log(LOG_NOTICE,
+		       "Configuration validity check: no BSD name to network interface mapping!"
+		       "\n  %@",
+		       ni_prefs);
 		goto done;
 	}
 
@@ -1544,14 +1762,20 @@ _SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef prefs,
 	if (!isA_CFArray(interfaces)) {
 		if (interfaces != NULL) CFRelease(interfaces);
 		isValid = FALSE;
-		SC_log(LOG_INFO, "No interfaces");
+		SC_log(LOG_NOTICE,
+		       "Configuration validity check: no service interfaces!"
+		       "\n  %@",
+		       prefs);
 		goto done;
 	}
 	mappingServiceBSDNameToInterface = __SCNetworkInterfaceCreateMappingUsingBSDName(interfaces);
 	CFRelease(interfaces);
-	if (isA_CFDictionary(mappingServiceBSDNameToInterface) == NULL) {
+	if (!isA_CFDictionary(mappingServiceBSDNameToInterface)) {
 		isValid = FALSE;
-		SC_log(LOG_INFO, "No Service BSD name to interface mapping");
+		SC_log(LOG_NOTICE,
+		       "Configuration validity check: no BSD name to service interface mapping!"
+		       "\n  %@",
+		       prefs);
 		goto done;
 	}
 
@@ -1581,48 +1805,60 @@ _SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef prefs,
 	CFDictionaryApplyFunction(mappingServiceBSDNameToInterface, _SCNetworkConfigurationValidateInterface, &context);
 
 	if (!isValid) {
-		SC_log(LOG_INFO, "mismatch between interface names in NetworkInterfaces.plist and preferences.plist");
+		SC_log(LOG_NOTICE,
+		       "Configuration validity check: mismatch between interface names in NetworkInterfaces.plist and preferences.plist!"
+		       "\n  %@"
+		       "\n  %@",
+		       prefs,
+		       ni_prefs);
 		if (repairConfiguration) {
-			isValid = _SCNetworkConfigurationRepairUsingPreferences(prefs, &context);
+			isValid = _SCNetworkConfigurationRepairUsingPreferences(prefs, ni_prefs, &context);
 			if (!isValid) {
 				goto done;
 			}
 			// Save the changes if repair fixed an invalid configuration
 			if (!SCPreferencesCommitChanges(prefs)) {
-				SC_log(LOG_INFO, "SCPreferencesCommitChanges() failed");
+				SC_log(LOG_NOTICE, "SCPreferencesCommitChanges() failed");
 			}
 		} else {
 			goto done;
 		}
 	}
+
 	/*
 	 - Check if all the network services mentioned in the SCNetworkSet are actually present in the SCNetworkService array
 	 */
-
 	allServices = SCNetworkServiceCopyAll(prefs);
-	if (isA_CFArray(allServices) == NULL) {
+	if (!isA_CFArray(allServices)) {
 		isValid = FALSE;
-		SC_log(LOG_INFO, "No services");
+		SC_log(LOG_NOTICE,
+		       "Configuration validity check: no services!"
+		       "\n  %@",
+		       prefs);
 		goto done;
 	}
 
 	allSets = SCNetworkSetCopyAll(prefs);
-	if (isA_CFArray(allSets) == NULL) {
+	if (!isA_CFArray(allSets)) {
 		isValid = FALSE;
-		SC_log(LOG_INFO, "No sets");
+		SC_log(LOG_NOTICE,
+		       "Configuration validity check: no sets!"
+		       "\n  %@",
+		       prefs);
 		goto done;
 	}
 
 	for (CFIndex idx = 0; ((idx < CFArrayGetCount(allSets)) && isValid); idx++) {
 		SCNetworkSetRef set = CFArrayGetValueAtIndex(allSets, idx);
 
-		if (isA_SCNetworkSet(set) == NULL) {
-			SC_log(LOG_INFO, "No set");
-			continue;
-		}
 		setServices = SCNetworkSetCopyServices(set);
 		if (setServices == NULL) {
-			SC_log(LOG_INFO, "No services");
+			SC_log(LOG_NOTICE,
+			       "Configuration validity check: set w/no services!"
+			       "\n  %@"
+			       "\n  %@",
+			       prefs,
+			       set);
 			continue;
 		}
 		for (CFIndex idx2 = 0; idx2 < CFArrayGetCount(setServices); idx2++) {
@@ -1630,7 +1866,8 @@ _SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef prefs,
 
 			if (!CFArrayContainsValue(allServices, CFRangeMake(0, CFArrayGetCount(allServices)), service)) {
 				isValid = FALSE;
-				SC_log(LOG_INFO, "All network services in the network set are not present in SCNetworkService array");
+				SC_log(LOG_NOTICE,
+				       "All network services in the network set are not present in SCNetworkService array");
 				break;
 			}
 		}
@@ -1647,7 +1884,10 @@ _SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef prefs,
 				SCNetworkServiceRef service = CFArrayGetValueAtIndex(setServiceOrder, idx2);
 				if (!CFArrayContainsValue(setServiceOrder, CFRangeMake(0, CFArrayGetCount(setServiceOrder)), service) &&
 				    !CFArrayContainsValue(allServices, CFRangeMake(0, CFArrayGetCount(allServices)), service)) {
-					SC_log(LOG_INFO, "Service: %@ is not present in the service order for set %@", service, set);
+					SC_log(LOG_NOTICE,
+					       "Service: %@ is not present in the service order for set %@",
+					       service,
+					       set);
 					break;
 				}
 			}
@@ -1675,7 +1915,11 @@ _SCNetworkConfigurationCheckValidityWithPreferences(SCPreferencesRef prefs,
 #endif	// !TARGET_OS_IPHONE
 	CFArrayRef vlans = SCVLANInterfaceCopyAll(prefs);
 	if (vlans != NULL) {
-		CFArrayApplyFunction(vlans, CFRangeMake(0, CFArrayGetCount(vlans)), validate_vlan, (void*)ni_prefs);
+		validate_prefs_context	*validate_prefs;
+
+		validate_prefs = validate_prefs_context_create(prefs, ni_prefs);
+		CFArrayApplyFunction(vlans, CFRangeMake(0, CFArrayGetCount(vlans)), validate_vlan, (void*)validate_prefs);
+		validate_prefs_context_release(validate_prefs);
 		CFRelease(vlans);
 	}
 
@@ -1719,8 +1963,8 @@ done:
 	if (bsdNameServiceProtocolPreserveMapping != NULL) {
 		CFRelease(bsdNameServiceProtocolPreserveMapping);
 	}
-	if (revertLimitNetworkConfiguration) {
-		__SCPreferencesSetLimitSCNetworkConfiguration(prefs, FALSE);
+	if (revertBypassSystemInterfaces) {
+		_SCNetworkConfigurationSetBypassSystemInterfaces(prefs, FALSE);
 	}
 	return isValid;
 }
@@ -1728,27 +1972,38 @@ done:
 Boolean
 _SCNetworkConfigurationCheckValidity(CFURLRef configDir, CFDictionaryRef options)
 {
-	CFURLRef baseURL = NULL;
-	CFURLRef configNetworkInterfaceFile = NULL;
-	CFStringRef configNetworkInterfaceFileString = NULL;
-	SCPreferencesRef configNetworkInterfacePref = NULL;
-	SCPreferencesRef configPref = NULL;
-	CFURLRef configPreferenceFile = NULL;
-	CFStringRef configPreferencesFileString = NULL;
-	Boolean isValid = FALSE;
-	char networkInterfaceStr[PATH_MAX];
-	char prefsStr[PATH_MAX];
+	CFURLRef		baseURL					= NULL;
+	CFURLRef		configNetworkInterfaceFile		= NULL;
+	CFStringRef		configNetworkInterfaceFileString	= NULL;
+	SCPreferencesRef	configNetworkInterfacePref		= NULL;
+	SCPreferencesRef	configPref				= NULL;
+	CFURLRef		configPreferenceFile			= NULL;
+	CFStringRef		configPreferencesFileString		= NULL;
+	Boolean			isValid					= FALSE;
+	char			networkInterfaceStr[PATH_MAX];
+	char			prefsStr[PATH_MAX];
 
 	if (configDir == NULL) {
-		SC_log(LOG_INFO, "Migration files not found in directory: %@",
+		SC_log(LOG_NOTICE, "Migration files not found in directory: %@",
 		       (configDir == NULL) ? CFSTR("NULL") : CFURLGetString(configDir));
 		goto done;
 	}
-	baseURL = CFURLCreateWithFileSystemPathRelativeToBase(NULL, PREFS_DEFAULT_DIR_RELATIVE,
-							      kCFURLPOSIXPathStyle, TRUE, configDir);
+	baseURL = CFURLCreateWithFileSystemPathRelativeToBase(NULL,
+							      PREFS_DEFAULT_DIR_RELATIVE,
+							      kCFURLPOSIXPathStyle,
+							      TRUE,
+							      configDir);
 
-	configPreferenceFile = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL, (const UInt8*)PREFS_DEFAULT_CONFIG_PLIST, sizeof(PREFS_DEFAULT_CONFIG_PLIST), FALSE, baseURL);
-	configNetworkInterfaceFile = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL, (const UInt8*)NETWORK_INTERFACES_PREFS_PLIST, sizeof(NETWORK_INTERFACES_PREFS_PLIST), FALSE, baseURL);
+	configPreferenceFile = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL,
+										     (const UInt8*)PREFS_DEFAULT_CONFIG_PLIST,
+										     sizeof(PREFS_DEFAULT_CONFIG_PLIST),
+										     FALSE,
+										     baseURL);
+	configNetworkInterfaceFile = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL,
+											   (const UInt8*)INTERFACES_DEFAULT_CONFIG_PLIST,
+											   sizeof(INTERFACES_DEFAULT_CONFIG_PLIST),
+											   FALSE,
+											   baseURL);
 
 	if (!CFURLGetFileSystemRepresentation(configPreferenceFile, TRUE, (UInt8*)prefsStr, sizeof(prefsStr))) {
 		SC_log(LOG_NOTICE, "Cannot get file system representation for url: %@", configPreferenceFile);
@@ -1807,18 +2062,18 @@ typedef struct {
 	CFMutableArrayRef externalInterfaceList;
 	CFMutableArrayRef networkInterfaceList;
 	Boolean foundNewInterfaces;
-} SCExternalMappingContext;
+} externalMappingContext;
 
 static void
 _SCNetworkConfigurationCollectInterfaceStorageEntity(const void *key, const void *value, void *context)
 {
 #pragma unused(key)
-	SCExternalMappingContext* ctx = context;
-	CFDictionaryRef interface_entity = NULL;
-	SCNetworkInterfaceRef targetInterface = (SCNetworkInterfaceRef)value;
+	externalMappingContext	*ctx			= context;
+	CFDictionaryRef		interface_entity	= NULL;
+	SCNetworkInterfaceRef	targetInterface		= (SCNetworkInterfaceRef)value;
 
 	if (CFArrayContainsValue(ctx->externalInterfaceList, CFRangeMake(0, CFArrayGetCount(ctx->externalInterfaceList)), targetInterface)) {
-		SC_log(LOG_INFO, "Target interface (%@) already exists, not adding to NetworkInterfaces.plist", targetInterface);
+		SC_log(LOG_NOTICE, "Target interface (%@) already exists, not adding to NetworkInterfaces.plist", targetInterface);
 		return; // If the target interface already exists then do not add it to NetworkInterfaces.plist
 	}
 	ctx->foundNewInterfaces = TRUE;
@@ -1833,22 +2088,22 @@ _SCNetworkConfigurationCollectInterfaceStorageEntity(const void *key, const void
 static CFArrayRef   // CFDictionaryRef
 _SCNetworkMigrationCreateNetworkInterfaceArray(SCPreferencesRef ni_prefs, CFDictionaryRef externalMapping, Boolean *hasNewInterface)
 {
-	SCExternalMappingContext context;
-	CFIndex count = 0;
-	CFMutableArrayRef externalInterfaceList = NULL;
-	CFArrayRef if_list = NULL;
-	CFDictionaryRef interface_entity = NULL;
-	CFMutableArrayRef networkInterfaceList = NULL;
+	externalMappingContext	context;
+	CFIndex			count			= 0;
+	CFMutableArrayRef	externalInterfaceList	= NULL;
+	CFArrayRef		if_list			= NULL;
+	CFDictionaryRef		interface_entity	= NULL;
+	CFMutableArrayRef	networkInterfaceList	= NULL;
 
 	if (ni_prefs == NULL) {
-		SC_log(LOG_INFO, "No NetworkInterfaces.plist");
+		SC_log(LOG_NOTICE, "No NetworkInterfaces.plist");
 		return NULL;
 	}
 
 	if_list = SCPreferencesGetValue(ni_prefs, INTERFACES);
 	if (!isA_CFArray(if_list) ||
 	    ((count = CFArrayGetCount(if_list)) == 0)) {
-		SC_log(LOG_INFO, "No interfaces");
+		SC_log(LOG_NOTICE, "No interfaces");
 		return NULL;
 	}
 
@@ -1864,7 +2119,7 @@ _SCNetworkMigrationCreateNetworkInterfaceArray(SCPreferencesRef ni_prefs, CFDict
 	}
 
 	if (!isA_CFDictionary(externalMapping)) {
-		SC_log(LOG_INFO, "No external mapping");
+		// if no external mapping
 		goto done;
 	}
 
@@ -1889,19 +2144,19 @@ done:
 static void
 SCNetworkMigrationMapSourceToTargetName(const void *key, const void *value, void *context)
 {
-	SCNetworkInterfaceRef interfaceKey = (SCNetworkInterfaceRef)key;
-	SCNetworkInterfaceRef interfaceValue = (SCNetworkInterfaceRef)value;
-	CFMutableDictionaryRef mapping = (CFMutableDictionaryRef)context;
-	CFStringRef sourceBSDName = NULL;
-	CFStringRef targetBSDName = NULL;
+	SCNetworkInterfaceRef	interfaceKey	= (SCNetworkInterfaceRef)key;
+	SCNetworkInterfaceRef	interfaceValue	= (SCNetworkInterfaceRef)value;
+	CFMutableDictionaryRef	mapping		= (CFMutableDictionaryRef)context;
+	CFStringRef		sourceBSDName	= NULL;
+	CFStringRef		targetBSDName	= NULL;
 
 	sourceBSDName = SCNetworkInterfaceGetBSDName(interfaceKey);
-	if (isA_CFString(sourceBSDName) == NULL) {
+	if (!isA_CFString(sourceBSDName)) {
 		return;
 	}
 
 	targetBSDName = SCNetworkInterfaceGetBSDName(interfaceValue);
-	if (isA_CFString(targetBSDName) == NULL) {
+	if (!isA_CFString(targetBSDName)) {
 		return;
 	}
 
@@ -1934,29 +2189,24 @@ done:
 	return bsdNameMapping;
 }
 
-typedef struct {
-	CFMutableArrayRef mutableServiceArray;
-	SCPreferencesRef prefs;
-} SCNetworkServiceArrayCopyContext;
-
 static CFDictionaryRef
 _SCNetworkMigrationCreateServiceSetMapping(SCPreferencesRef prefs)
 {
-	CFMutableDictionaryRef serviceSetMapping = CFDictionaryCreateMutable(NULL, 0,
-									     &kCFTypeDictionaryKeyCallBacks,
-									     &kCFTypeDictionaryValueCallBacks);
-	SCNetworkServiceRef service = NULL;
-	CFArrayRef services = NULL;
-	CFMutableArrayRef setList = NULL;
-	CFArrayRef sets = NULL;
+	SCNetworkServiceRef	service;
+	CFMutableDictionaryRef	serviceSetMapping;
+	CFArrayRef		services	= NULL;
+	CFMutableArrayRef	setList		= NULL;
+	CFArrayRef		sets		= NULL;
 
+	serviceSetMapping = CFDictionaryCreateMutable(NULL, 0,
+						      &kCFTypeDictionaryKeyCallBacks,
+						      &kCFTypeDictionaryValueCallBacks);
 	services = SCNetworkServiceCopyAll(prefs);
 	if (services == NULL) {
 		goto done;
 	}
 	for (CFIndex idx = 0; idx < CFArrayGetCount(services); idx++) {
 		service = CFArrayGetValueAtIndex(services, idx);
-
 		if (!CFDictionaryContainsKey(serviceSetMapping, service)) {
 			setList = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
 			CFDictionaryAddValue(serviceSetMapping, service, setList);
@@ -1971,9 +2221,10 @@ _SCNetworkMigrationCreateServiceSetMapping(SCPreferencesRef prefs)
 	}
 
 	for (CFIndex idx = 0; idx < CFArrayGetCount(sets); idx++) {
-		SCNetworkSetRef set = CFArrayGetValueAtIndex(sets, idx);
-		services = SCNetworkSetCopyServices(set);
+		SCNetworkSetRef	set;
 
+		set = CFArrayGetValueAtIndex(sets, idx);
+		services = SCNetworkSetCopyServices(set);
 		for (CFIndex idx2 = 0; idx2 < CFArrayGetCount(services); idx2++) {
 			service = CFArrayGetValueAtIndex(services, idx2);
 			setList = (CFMutableArrayRef)CFDictionaryGetValue(serviceSetMapping, service);
@@ -1995,14 +2246,14 @@ static CFDictionaryRef
 _SCNetworkMigrationCreateSetMapping(SCPreferencesRef sourcePrefs,
 				    SCPreferencesRef targetPrefs)
 {
-	SCNetworkSetRef currentSourceSet = NULL;
-	CFMutableDictionaryRef setMapping = NULL;
-	CFStringRef setName;
-	CFArrayRef sourceSets = NULL;
-	CFIndex targetCount;
-	SCNetworkSetRef targetSet;
-	CFArrayRef targetSets = NULL;
-	CFMutableArrayRef targetSetsMutable = NULL;
+	SCNetworkSetRef		currentSourceSet	= NULL;
+	CFMutableDictionaryRef	setMapping		= NULL;
+	CFStringRef		setName;
+	CFArrayRef		sourceSets		= NULL;
+	CFIndex			targetCount;
+	SCNetworkSetRef		targetSet;
+	CFArrayRef		targetSets		= NULL;
+	CFMutableArrayRef	targetSetsMutable	= NULL;
 
 	sourceSets = SCNetworkSetCopyAll(sourcePrefs);
 	targetSets = SCNetworkSetCopyAll(targetPrefs);
@@ -2032,7 +2283,7 @@ _SCNetworkMigrationCreateSetMapping(SCPreferencesRef sourcePrefs,
 			CFRelease(targetSet);
 		}
 		else {
-			SC_log(LOG_ERR, "Number of sets in the target should be at least 1, but is found to be %ld", targetCount);
+			SC_log(LOG_NOTICE, "Number of sets in the target should be at least 1, but is found to be %ld", targetCount);
 			goto done;
 		}
 	}
@@ -2075,54 +2326,48 @@ _SCNetworkMigrationCreateSetMapping(SCPreferencesRef sourcePrefs,
 		CFRelease(currentSourceSet);
 	}
 
-	if (setMapping != NULL) {
-		SC_log(LOG_NOTICE, "Set mapping: %@", setMapping);
-	} else {
-		SC_log(LOG_INFO, "Set mapping: NULL");
-	}
-
 	return setMapping;
 }
 
 // This function finds the mapping between source and target preferences (SCNetworkServicesRef -> SCNetworkServicesRef)
 // If there is no mapping found between source and target preferences, then the CFBooleanRef value indicating no value is found is stored (SCNetworkServicesRef -> kCFBooleanFalse)
 static CFDictionaryRef
-_SCNetworkMigrationCreateServiceMappingUsingBSDMapping(SCPreferencesRef sourcePrefs,
-						       SCPreferencesRef targetPrefs,
-						       CFDictionaryRef bsdNameMapping)
+_SCNetworkMigrationCreateServiceMappingUsingBSDNameMapping(SCPreferencesRef	sourcePrefs,
+							   SCPreferencesRef	targetPrefs,
+							   CFDictionaryRef	bsdNameMapping)
 {
-	CFStringRef bsdNameMapTarget = NULL;
-	CFMutableDictionaryRef serviceMapping = NULL;                               // Mapping of services between source and target configurations
-	CFStringRef sourceBSDName = NULL;
-	CFIndex sourceCount = 0;
-	SCNetworkInterfaceRef sourceInterface = NULL;
-	CFStringRef sourceInterfaceSubType = NULL;		// Check interface type and subtype to be able to transfer VPN
-	CFStringRef sourceInterfaceType = NULL;
-	CFArrayRef sourceSCNetworkServices = NULL;
-	CFMutableArrayRef sourceSCNetworkServicesMutable = NULL;                    // Source SCNetworkServiceRef mutable array
-	SCNetworkServiceRef sourceService = NULL;
-	CFStringRef targetBSDName = NULL;
-	CFIndex targetCount = 0;                                   // Count of Source and Target Services
-	SCNetworkInterfaceRef targetInterface = NULL;
-	CFStringRef targetInterfaceSubType = NULL;		// services during migration
-	CFStringRef targetInterfaceType = NULL;
-	CFArrayRef targetSCNetworkServices = NULL;
-	CFMutableArrayRef targetSCNetworkServicesMutable = NULL;                    // Target SCNetworkServiceRef mutable array
-	SCNetworkServiceRef targetService = NULL;
+	CFMutableDictionaryRef	serviceMapping			= NULL;	// Mapping of services between source and target configurations
+	CFStringRef		sourceBSDName			= NULL;
+	CFIndex			sourceCount			= 0;
+	SCNetworkInterfaceRef	sourceInterface			= NULL;
+	CFStringRef		sourceInterfaceSubType		= NULL;	// Check interface type and subtype to be able to transfer VPN
+	CFStringRef		sourceInterfaceType		= NULL;
+	CFArrayRef		sourceSCNetworkServices		= NULL;
+	CFMutableArrayRef	sourceSCNetworkServicesMutable	= NULL;	// Source SCNetworkServiceRef mutable array
+	SCNetworkServiceRef	sourceService			= NULL;
+	CFStringRef		targetBSDName			= NULL;
+	CFStringRef		targetBSDNameMapped		= NULL;
+	CFIndex			targetCount			= 0;	// Count of Source and Target Services
+	SCNetworkInterfaceRef	targetInterface			= NULL;
+	CFStringRef		targetInterfaceSubType		= NULL;	// services during migration
+	CFStringRef		targetInterfaceType		= NULL;
+	CFArrayRef		targetSCNetworkServices		= NULL;
+	CFMutableArrayRef	targetSCNetworkServicesMutable	= NULL;	// Target SCNetworkServiceRef mutable array
+	SCNetworkServiceRef	targetService			= NULL;
 
 	// We need BSD Mapping to successfully create service mapping
 	if (bsdNameMapping == NULL) {
-		SC_log(LOG_INFO, "No BSD name mapping");
+		SC_log(LOG_NOTICE, "No BSD name mappings");
 		goto done;
 	}
 	sourceSCNetworkServices = SCNetworkServiceCopyAll(sourcePrefs);
-	if (isA_CFArray(sourceSCNetworkServices) == NULL) {
-		SC_log(LOG_INFO, "No source network services");
+	if (!isA_CFArray(sourceSCNetworkServices)) {
+		SC_log(LOG_NOTICE, "No source network services");
 		goto done;
 	}
 	targetSCNetworkServices = SCNetworkServiceCopyAll(targetPrefs);
-	if (isA_CFArray(targetSCNetworkServices) == NULL) {
-		SC_log(LOG_INFO, "No target network services");
+	if (!isA_CFArray(targetSCNetworkServices)) {
+		SC_log(LOG_NOTICE, "No target network services");
 		goto done;
 	}
 
@@ -2139,14 +2384,14 @@ _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(SCPreferencesRef sourcePr
 		sourceInterface = NULL;
 		sourceInterfaceType = NULL;
 		sourceInterfaceSubType = NULL;
-		bsdNameMapTarget = NULL;
+		targetBSDNameMapped = NULL;
 
 		targetCount = CFArrayGetCount(targetSCNetworkServicesMutable);
 		sourceService = (SCNetworkServiceRef) CFArrayGetValueAtIndex(sourceSCNetworkServicesMutable, idx);
 
 		sourceInterface = SCNetworkServiceGetInterface(sourceService);
 		if (sourceInterface == NULL) {
-			SC_log(LOG_INFO, "No source interface");
+			SC_log(LOG_NOTICE, "No source interface");
 			continue;
 		}
 
@@ -2155,8 +2400,8 @@ _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(SCPreferencesRef sourcePr
 		    (CFEqual(sourceInterfaceType, kSCValNetInterfaceTypeVPN) ||
 		     CFEqual(sourceInterfaceType, kSCValNetInterfaceTypePPP))) {
 			    sourceInterfaceSubType = __SCNetworkInterfaceGetEntitySubType(sourceInterface);
-			    if (isA_CFString(sourceInterfaceSubType) == NULL) {
-				    SC_log(LOG_INFO, "No source interface SubType");
+			    if (!isA_CFString(sourceInterfaceSubType)) {
+				    SC_log(LOG_NOTICE, "No source interface SubType");
 				    continue;
 			    }
 		}
@@ -2167,15 +2412,12 @@ _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(SCPreferencesRef sourcePr
 			 !isA_CFString(sourceInterfaceType)) {
 			sourceBSDName = SCNetworkInterfaceGetBSDName(sourceInterface);
 			if (!isA_CFString(sourceBSDName) ||
-			    !CFDictionaryContainsKey(bsdNameMapping, sourceBSDName)) {
+			    !CFDictionaryGetValueIfPresent(bsdNameMapping,
+							   sourceBSDName,
+							   (const void **)&targetBSDNameMapped) ||
+			    !isA_CFString(targetBSDNameMapped)) {
 				SC_log(LOG_INFO, "No BSD name mapping for %@",
-				       (sourceBSDName == NULL) ? CFSTR("NULL") : sourceBSDName);
-				continue;
-			}
-
-			bsdNameMapTarget = CFDictionaryGetValue(bsdNameMapping, sourceBSDName);
-			if (isA_CFString(bsdNameMapTarget) == NULL) {
-				SC_log(LOG_INFO, "No BSD name mapping target");
+				       (sourceBSDName != NULL) ? sourceBSDName : CFSTR("NULL"));
 				continue;
 			}
 		}
@@ -2191,19 +2433,17 @@ _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(SCPreferencesRef sourcePr
 
 			targetInterface = SCNetworkServiceGetInterface(targetService);
 			if (targetInterface == NULL) {
-				SC_log(LOG_INFO, "No target interface");
+				SC_log(LOG_NOTICE, "No target interface");
 				continue;
 			}
-			SC_log(LOG_INFO, "targetInterface: %@", targetInterface);
 			if (sourceBSDName != NULL) {
 				targetBSDName = SCNetworkInterfaceGetBSDName(targetInterface);
-				if (isA_CFString(targetBSDName) == NULL) {
-					SC_log(LOG_INFO, "No target BSD name");
+				if (!isA_CFString(targetBSDName)) {
+					SC_log(LOG_NOTICE, "No target BSD name: %@", targetInterface);
 					continue;
 				}
 
-				if (CFEqual(targetBSDName, bsdNameMapTarget)) {
-					SC_log(LOG_INFO, "Removing target BSD name: %@", targetBSDName);
+				if (CFEqual(targetBSDName, targetBSDNameMapped)) {
 					CFDictionaryAddValue(serviceMapping, sourceService, targetService);
 					CFArrayRemoveValueAtIndex(targetSCNetworkServicesMutable, idx2);
 					break;
@@ -2211,23 +2451,21 @@ _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(SCPreferencesRef sourcePr
 			} else {
 				// Source Interface Type should be VPN
 				targetInterfaceType = __SCNetworkInterfaceGetEntityType(targetInterface);
-				if ((isA_CFString(targetInterfaceType) == NULL) ||
+				if ((!isA_CFString(targetInterfaceType)) ||
 				    (!CFEqual(targetInterfaceType, kSCValNetInterfaceTypeVPN) &&
 				     !CFEqual(targetInterfaceType, kSCValNetInterfaceTypePPP))) {
-					    SC_log(LOG_INFO, "Unexpected target interface type: %@",
-						   (targetInterfaceType != NULL) ? targetInterfaceType : CFSTR("NULL"));
-					    continue;
+					SC_log(LOG_NOTICE, "Unexpected target interface type: %@", targetInterface);
+					continue;
 				    }
 				targetInterfaceSubType = __SCNetworkInterfaceGetEntitySubType(targetInterface);
-				if (isA_CFString(targetInterfaceSubType) == NULL) {
-					SC_log(LOG_INFO, "No target interface SubType");
+				if (!isA_CFString(targetInterfaceSubType)) {
+					SC_log(LOG_NOTICE, "No target interface SubType: %@", targetInterface);
 					continue;
 				}
 
 				// Check if the target interface type and the target interface sub type match
 				if (CFEqual(targetInterfaceType, sourceInterfaceType) &&
 				    CFEqual(targetInterfaceSubType, sourceInterfaceSubType)) {
-					SC_log(LOG_INFO, "Removing target BSD Name: %@ for VPN", targetBSDName);
 					CFDictionaryAddValue(serviceMapping, sourceService, targetService);
 					CFArrayRemoveValueAtIndex(targetSCNetworkServicesMutable, idx2);
 					break;
@@ -2237,7 +2475,6 @@ _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(SCPreferencesRef sourcePr
 		// Check if sourceService has found a mapping or not, if not the create a NULL mapping to indicate
 		// the this service needs to be added and not replaced
 		if (!CFDictionaryContainsKey(serviceMapping, sourceService)) {
-			SC_log(LOG_INFO, "Service needs to be added: %@", sourceService);
 			CFDictionaryAddValue(serviceMapping, sourceService, kCFBooleanFalse);
 		}
 	}
@@ -2257,21 +2494,15 @@ _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(SCPreferencesRef sourcePr
 		CFRelease(targetSCNetworkServicesMutable);
 	}
 
-	if (serviceMapping != NULL) {
-		SC_log(LOG_NOTICE, "Service mapping: %@", serviceMapping);
-	} else {
-		SC_log(LOG_INFO, "Service mapping: NULL");
-	}
-
 	return serviceMapping;
 }
 
 typedef struct {
-	SCPreferencesRef targetPrefs;
-	CFDictionaryRef bsdMapping;
-	CFDictionaryRef setMapping;
-	CFDictionaryRef serviceSetMapping;
-} ServiceMigrationContext;
+	SCPreferencesRef	targetPrefs;
+	CFDictionaryRef		bsdNameMapping;
+	CFDictionaryRef		setMapping;
+	CFDictionaryRef		serviceSetMapping;
+} serviceMigrationContext;
 
 // value can be:
 //	SCNetworkServiceRef: if target service needs replacement
@@ -2279,51 +2510,226 @@ typedef struct {
 static void
 ServiceMigrationAddOrReplace(const void *key, const void *value, void *context)
 {
-	CFDictionaryRef bsdMapping = NULL;
-	ServiceMigrationContext *ctx = (ServiceMigrationContext*)context;
-	CFDictionaryRef setMapping;
-	CFDictionaryRef sourceServiceSetMapping;
-	SCNetworkServiceRef sourceService = (SCNetworkServiceRef)key;
-	SCPreferencesRef targetPrefs = NULL;
-	SCNetworkServiceRef targetService = (SCNetworkServiceRef)value;
+	CFDictionaryRef		bsdNameMapping		= NULL;
+	serviceMigrationContext	*ctx			= (serviceMigrationContext*)context;
+	CFDictionaryRef		setMapping;
+	CFDictionaryRef		sourceServiceSetMapping;
+	SCNetworkServiceRef	sourceService		= (SCNetworkServiceRef)key;
+	SCPreferencesRef	targetPrefs		= NULL;
+	SCNetworkServiceRef	targetService		= (SCNetworkServiceRef)value;
 
 	targetPrefs = ctx->targetPrefs;
-	bsdMapping = ctx->bsdMapping;
+	bsdNameMapping = ctx->bsdNameMapping;
 	setMapping = ctx->setMapping;
 	sourceServiceSetMapping = ctx->serviceSetMapping;
 
-	if ((setMapping != NULL || sourceServiceSetMapping != NULL)) {
-		if (isA_SCNetworkService(targetService) != NULL) {
-			SC_log(LOG_INFO, "Removing target service: %@", targetService);
+	if ((setMapping != NULL) || (sourceServiceSetMapping != NULL)) {
+		if (isA_SCNetworkService(targetService)) {
+			(void)SCNetworkServiceGetName(targetService);	// ensures that the service name will be logged
 			SCNetworkServiceRemove(targetService);
 		}
 	}
-	SC_log(LOG_INFO, "Adding service: %@", sourceService);
-	if (__SCNetworkServiceMigrateNew(targetPrefs, sourceService, bsdMapping, setMapping, sourceServiceSetMapping) ==  FALSE) {
-		SC_log(LOG_INFO, "Could not add service: %@", sourceService);
+
+	if (!__SCNetworkServiceMigrateNew(targetPrefs, sourceService, bsdNameMapping, setMapping, sourceServiceSetMapping)) {
+		(void)SCNetworkServiceGetName(sourceService);	// ensures that the service name will be logged
+		SC_log(LOG_INFO, "*** [source] service add failed: %@", sourceService);
 	}
 }
 
-static Boolean
-_SCNetworkMigrationDoServiceMigration(SCPreferencesRef sourcePrefs, SCPreferencesRef targetPrefs,
-				      CFDictionaryRef serviceMapping, CFDictionaryRef bsdMapping,
-				      CFDictionaryRef setMapping, CFDictionaryRef serviceSetMapping)
+static void
+logConfiguration(const char *description, SCPreferencesRef prefs)
 {
-	ServiceMigrationContext context;
-	Boolean success = FALSE;
+	CFArrayRef	sets;
+
+	sets = SCNetworkSetCopyAll(prefs);
+	if (sets != NULL) {
+		CFIndex	n	= CFArrayGetCount(sets);
+
+		SC_log(LOG_NOTICE, "%s configuration", description);
+		for (CFIndex i = 0; i < n; i++) {
+			CFArrayRef	services;
+			SCNetworkSetRef	set;
+
+			set = CFArrayGetValueAtIndex(sets, i);
+			SC_log(LOG_NOTICE, "  Set %@ (%@)",
+			       SCNetworkSetGetSetID(set),
+			       SCNetworkSetGetName(set));
+
+			services = SCNetworkSetCopyServices(set);
+			if (services != NULL) {
+				CFIndex		n;
+				CFIndex		nOrder	= 0;
+				CFArrayRef	order;
+
+				order = SCNetworkSetGetServiceOrder(set);
+				if (order != NULL) {
+					nOrder = CFArrayGetCount(order);
+				}
+
+				n = CFArrayGetCount(services);
+				if (n > 1) {
+					CFMutableArrayRef	sorted;
+
+					sorted = CFArrayCreateMutableCopy(NULL, 0, services);
+					CFArraySortValues(sorted,
+							  CFRangeMake(0, CFArrayGetCount(sorted)),
+							  _SCNetworkServiceCompare,
+							  (void *)order);
+					CFRelease(services);
+					services = sorted;
+				}
+
+				for (CFIndex i = 0; i < n; i++) {
+					CFStringRef		bsdName;
+					SCNetworkInterfaceRef	interface;
+					CFIndex			orderIndex	= kCFNotFound;
+					SCNetworkServiceRef	service;
+					CFStringRef		serviceName;
+					CFStringRef		serviceID;
+
+					service     = CFArrayGetValueAtIndex(services, i);
+					serviceID   = SCNetworkServiceGetServiceID(service);
+					serviceName = SCNetworkServiceGetName(service);
+					if (serviceName == NULL) serviceName = CFSTR("");
+
+					interface   = SCNetworkServiceGetInterface(service);
+					bsdName     = SCNetworkInterfaceGetBSDName(interface);
+
+					if (order != NULL) {
+						orderIndex  = CFArrayGetFirstIndexOfValue(order,
+											  CFRangeMake(0, nOrder),
+											  serviceID);
+					}
+					if (orderIndex != kCFNotFound) {
+						SC_log(LOG_NOTICE, "    Service %2ld : %@, %2d (%@%s%@)",
+						       orderIndex + 1,
+						       serviceID,
+						       __SCNetworkInterfaceOrder(SCNetworkServiceGetInterface(service)),	// temp?
+						       serviceName,
+						       bsdName != NULL ? ", " : "",
+						       bsdName != NULL ? bsdName : CFSTR(""));
+					} else {
+						SC_log(LOG_NOTICE, "    Service    : %@, %2d (%@%s%@)",
+						       serviceID,
+						       __SCNetworkInterfaceOrder(SCNetworkServiceGetInterface(service)),	// temp?
+						       serviceName,
+						       bsdName != NULL ? ", " : "",
+						       bsdName != NULL ? bsdName : CFSTR(""));
+					}
+				}
+
+				CFRelease(services);
+			}
+		}
+
+		CFRelease(sets);
+	}
+
+	return;
+}
+
+static void
+logMapping(const void *key, const void *value, void *context)
+{
+#pragma unused(context)
+	CFTypeRef	mapping_key		= NULL;
+	const char	**mapping_name		= (const char **)context;
+	CFTypeRef	mapping_value		= NULL;
+	Boolean		mapping_value_new	= FALSE;
+
+	if (*mapping_name != NULL) {
+		SC_log(LOG_NOTICE, "%s =", *mapping_name);
+		*mapping_name = NULL;
+	}
+
+	if (isA_SCNetworkService(key)) {
+		mapping_key = SCNetworkServiceGetServiceID(key);
+	} else if (isA_SCNetworkSet(key)) {
+		mapping_key = SCNetworkSetGetSetID(key);
+	} else {
+		mapping_key = key;
+	}
+
+	if (isA_SCNetworkService(value)) {
+		mapping_value = SCNetworkServiceGetServiceID(value);
+	} else if (isA_SCNetworkSet(value)) {
+		mapping_value = SCNetworkSetGetSetID(value);
+	} else if (isA_CFBoolean(value)) {
+		mapping_value = CFSTR("None");
+	} else if (isA_CFArray(value)) {
+		CFIndex			n	= CFArrayGetCount(value);
+		CFMutableStringRef	str	= CFStringCreateMutable(NULL, 0);
+
+		CFStringAppendFormat(str, NULL, CFSTR("( "));
+		for (CFIndex i = 0; i < n; i++) {
+			CFTypeRef	val;
+
+			val = CFArrayGetValueAtIndex(value, i);
+			if (isA_SCNetworkSet(val)) {
+				val = SCNetworkSetGetSetID(val);
+			}
+			CFStringAppendFormat(str, NULL, CFSTR("%s%@"),
+					     i == 0 ? "" : ", ",
+					     val);
+
+
+		}
+		CFStringAppendFormat(str, NULL, CFSTR(" )"));
+		mapping_value = str;
+		mapping_value_new = TRUE;
+	} else {
+		mapping_value = value;
+	}
+
+	SC_log(LOG_NOTICE, "  %@ --> %@", mapping_key, mapping_value);
+
+	if (mapping_value_new) {
+		CFRelease(mapping_value);
+	}
+	return;
+}
+
+static Boolean
+_SCNetworkMigrationDoServiceMigration(SCPreferencesRef	sourcePrefs,
+				      SCPreferencesRef	targetPrefs,
+				      CFDictionaryRef	serviceMapping,
+				      CFDictionaryRef	bsdNameMapping,
+				      CFDictionaryRef	setMapping,
+				      CFDictionaryRef	serviceSetMapping)
+{
+	serviceMigrationContext	context;
+	const char		*mapping_name;
+	Boolean			success	= FALSE;
 
 	if ((sourcePrefs == NULL) ||
 	    (targetPrefs == NULL) ||
-	    (isA_CFDictionary(serviceMapping) == NULL) ||
-	    (isA_CFDictionary(bsdMapping) == NULL)) {
-		SC_log(LOG_INFO, "No sourcePrefs, targetPrefs, serviceMapping, or bsdMapping");
+	    !isA_CFDictionary(serviceMapping) ||
+	    !isA_CFDictionary(bsdNameMapping)) {
+		SC_log(LOG_INFO, "No sourcePrefs, targetPrefs, serviceMapping, or bsdNameMapping");
 		goto done;
 	}
+
+	if (bsdNameMapping != NULL) {
+		mapping_name = "BSD name mapping";
+		CFDictionaryApplyFunction(bsdNameMapping, logMapping, &mapping_name);
+	}
+	if (serviceMapping != NULL) {
+		mapping_name = "SCNetworkService mapping";
+		CFDictionaryApplyFunction(serviceMapping, logMapping, &mapping_name);
+	}
+	if (setMapping != NULL) {
+		mapping_name = "SCNetworkSet mapping";
+		CFDictionaryApplyFunction(setMapping, logMapping, &mapping_name);
+	}
+	if (serviceSetMapping != NULL) {
+		mapping_name = "SCNetworkService/SCNetworkSet mapping";
+		CFDictionaryApplyFunction(serviceSetMapping, logMapping, &mapping_name);
+	}
+
 	context.targetPrefs = targetPrefs;
-	context.bsdMapping = bsdMapping;
+	context.bsdNameMapping = bsdNameMapping;
 	context.setMapping = setMapping;
 	context.serviceSetMapping = serviceSetMapping;
-
 	CFDictionaryApplyFunction(serviceMapping, ServiceMigrationAddOrReplace, &context);
 
 	success = TRUE;
@@ -2334,15 +2740,16 @@ done:
 static Boolean
 _SCNetworkMigrationDoSystemMigration(SCPreferencesRef sourcePrefs, SCPreferencesRef targetPrefs)
 {
-	CFStringEncoding nameEncoding;
-	CFStringRef computerName;
-	CFStringRef hostname;
-	CFStringRef localHostname;
-	CFDictionaryRef btmm = NULL;
-	CFDictionaryRef btmmDSID = NULL;
-	CFStringRef btmmDSIDPath;
-	CFStringRef btmmPath;
+	CFDictionaryRef		btmm;
+	CFDictionaryRef		btmmDSID;
+	CFStringRef		btmmDSIDPath;
+	CFStringRef		btmmPath;
+	CFStringRef		computerName;
+	CFStringRef		hostname;
+	CFStringRef		localHostname;
+	CFStringEncoding	nameEncoding;
 
+	SC_log(LOG_NOTICE, "Copying \"system\" settings");
 
 	if ((sourcePrefs == NULL) ||
 	    (targetPrefs == NULL)) {
@@ -2352,18 +2759,21 @@ _SCNetworkMigrationDoSystemMigration(SCPreferencesRef sourcePrefs, SCPreferences
 	hostname = SCPreferencesGetHostName(sourcePrefs);
 	if (hostname != NULL) {
 		SCPreferencesSetHostName(targetPrefs, hostname);
+		SC_log(LOG_NOTICE, "  copied HostName");
 	}
 
 	localHostname = _SCPreferencesCopyLocalHostName(sourcePrefs);
 	if (localHostname != NULL) {
 		SCPreferencesSetLocalHostName(targetPrefs, localHostname);
 		CFRelease(localHostname);
+		SC_log(LOG_NOTICE, "  copied LocalHostName");
 	}
 
 	computerName = _SCPreferencesCopyComputerName(sourcePrefs, &nameEncoding);
 	if (computerName != NULL) {
 		SCPreferencesSetComputerName(targetPrefs, computerName, nameEncoding);
 		CFRelease(computerName);
+		SC_log(LOG_NOTICE, "  copied ComputerName");
 	}
 
 	btmmPath = CFStringCreateWithFormat(NULL, NULL,
@@ -2382,7 +2792,6 @@ _SCNetworkMigrationDoSystemMigration(SCPreferencesRef sourcePrefs, SCPreferences
 						kSCPrefSystem,
 						kSCCompNetwork,
 						BACK_TO_MY_MAC_DSIDS);
-
 	btmmDSID = SCPreferencesPathGetValue(sourcePrefs, btmmDSIDPath);
 	if (btmmDSID != NULL) {
 		SCPreferencesPathSetValue(targetPrefs, btmmDSIDPath, btmmDSID);
@@ -2391,37 +2800,38 @@ _SCNetworkMigrationDoSystemMigration(SCPreferencesRef sourcePrefs, SCPreferences
 
 	return TRUE;
 }
+
 #if	!TARGET_OS_IPHONE
 
 typedef struct {
-	CFMutableArrayRef interfaceList;
-	SCPreferencesRef ni_prefs;
-	CFDictionaryRef bsdMapping;
-} SCVirtualInterfaceMemberListContext;
+	CFMutableArrayRef	interfaceList;
+	SCPreferencesRef	ni_prefs;
+	CFDictionaryRef		bsdNameMapping;
+} virtualInterfaceMemberListContext;
 
 typedef struct {
-	SCPreferencesRef prefs;
-	SCPreferencesRef ni_prefs;
-	CFDictionaryRef bsdMapping;
-	CFDictionaryRef virtualBSDMapping;
-	CFDictionaryRef mappingBSDNameToService;
-	CFDictionaryRef setMapping;
-	CFDictionaryRef serviceSetMapping;
-} SCVirtualInterfaceContext;
+	SCPreferencesRef	prefs;
+	SCPreferencesRef	ni_prefs;
+	CFDictionaryRef		bsdNameMapping;
+	CFDictionaryRef		virtualBSDNameMapping;
+	CFDictionaryRef		mappingBSDNameToService;
+	CFDictionaryRef		setMapping;
+	CFDictionaryRef		serviceSetMapping;
+} virtualInterfaceContext;
 
 static void
 add_virtual_interface(const void *value, void *context)
 {
-	SCVirtualInterfaceMemberListContext *ctx = (SCVirtualInterfaceMemberListContext*)context;
-	CFMutableArrayRef interfaceList = ctx->interfaceList;
-	CFDictionaryRef bsdMapping = ctx->bsdMapping;
-	CFStringRef oldInterfaceBSDName = (CFStringRef)value;
-	SCNetworkInterfaceRef newInterface;
-	CFStringRef newInterfaceBSDName;
+	virtualInterfaceMemberListContext	*ctx			= (virtualInterfaceMemberListContext*)context;
+	CFDictionaryRef				bsdNameMapping		= ctx->bsdNameMapping;
+	CFMutableArrayRef			interfaceList		= ctx->interfaceList;
+	CFStringRef				oldInterfaceBSDName	= (CFStringRef)value;
+	SCNetworkInterfaceRef			newInterface;
+	CFStringRef				newInterfaceBSDName;
 
 	SC_log(LOG_INFO, "old BSD interface name: %@", oldInterfaceBSDName);
 
-	newInterfaceBSDName = CFDictionaryGetValue(bsdMapping, oldInterfaceBSDName);
+	newInterfaceBSDName = CFDictionaryGetValue(bsdNameMapping, oldInterfaceBSDName);
 	if (newInterfaceBSDName == NULL) {
 		return;
 	}
@@ -2429,7 +2839,7 @@ add_virtual_interface(const void *value, void *context)
 
 	newInterface = __SCNetworkInterfaceCreateWithNIPreferencesUsingBSDName(NULL, ctx->ni_prefs, newInterfaceBSDName);
 	if (newInterface != NULL) {
-		SC_log(LOG_INFO, "Adding interface to interfaceList: %@", newInterface);
+		SC_log(LOG_INFO, "adding interface to interfaceList: %@", newInterface);
 		CFArrayAppendValue(interfaceList, newInterface);
 		CFRelease(newInterface);
 	}
@@ -2439,25 +2849,25 @@ add_virtual_interface(const void *value, void *context)
 static void
 add_target_bridge(const void *key, const void *value, void *context)
 {
-	CFStringRef bridgeName;
-	CFDictionaryRef bridgeOptions;
-	SCVirtualInterfaceContext *ctx = (SCVirtualInterfaceContext*)context;
-	CFDictionaryRef bridgeBSDNameMapping = ctx->virtualBSDMapping;
-	CFDictionaryRef bsdNameToServiceMapping = ctx->mappingBSDNameToService;
-	SCVirtualInterfaceMemberListContext memberListContext;
-	CFMutableArrayRef newInterfaceList;
-	SCBridgeInterfaceRef newBridge;
-	SCBridgeInterfaceRef oldBridge = (SCBridgeInterfaceRef)key;
-	CFStringRef oldBSDName;
-	CFArrayRef oldInterfaceList = (CFArrayRef)value;
-	CFArrayRef oldServiceList;
-	SCPreferencesRef prefs = ctx->prefs;
-	CFDictionaryRef serviceSetMapping = ctx->serviceSetMapping;
-	CFDictionaryRef setMapping = ctx->setMapping;
+	CFStringRef				bridgeName;
+	CFDictionaryRef				bridgeOptions;
+	virtualInterfaceContext			*ctx			= (virtualInterfaceContext*)context;
+	CFDictionaryRef				bridgeBSDNameMapping	= ctx->virtualBSDNameMapping;
+	CFDictionaryRef				bsdNameToServiceMapping	= ctx->mappingBSDNameToService;
+	virtualInterfaceMemberListContext	memberListContext;
+	CFMutableArrayRef			newInterfaceList;
+	SCBridgeInterfaceRef			newBridge;
+	SCBridgeInterfaceRef			oldBridge		= (SCBridgeInterfaceRef)key;
+	CFStringRef				oldBSDName;
+	CFArrayRef				oldInterfaceList	= (CFArrayRef)value;
+	CFArrayRef				oldServiceList;
+	SCPreferencesRef			prefs			= ctx->prefs;
+	CFDictionaryRef				serviceSetMapping	= ctx->serviceSetMapping;
+	CFDictionaryRef				setMapping		= ctx->setMapping;
 
 	newInterfaceList = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
 
-	memberListContext.bsdMapping = ctx->bsdMapping;
+	memberListContext.bsdNameMapping = ctx->bsdNameMapping;
 	memberListContext.interfaceList = newInterfaceList;
 	memberListContext.ni_prefs = ctx->ni_prefs;
 
@@ -2466,7 +2876,7 @@ add_target_bridge(const void *key, const void *value, void *context)
 	newBridge = SCBridgeInterfaceCreate(prefs);
 
 	if (!__SCBridgeInterfaceSetMemberInterfaces(newBridge, newInterfaceList)) {
-		SC_log(LOG_INFO, "__SCBridgeInterfaceSetMemberInterfaces() failed");
+		SC_log(LOG_NOTICE, "__SCBridgeInterfaceSetMemberInterfaces() failed");
 	}
 	CFRelease(newInterfaceList);
 
@@ -2494,7 +2904,7 @@ add_target_bridge(const void *key, const void *value, void *context)
 	for (CFIndex idx = 0; idx < CFArrayGetCount(oldServiceList); idx++) {
 		SCNetworkServiceRef oldService = CFArrayGetValueAtIndex(oldServiceList, idx);
 		if (!__SCNetworkServiceMigrateNew(prefs, oldService, bridgeBSDNameMapping, setMapping, serviceSetMapping)) {
-			SC_log(LOG_INFO, "Could not migrate Bridge service: %@", oldService);
+			SC_log(LOG_NOTICE, "could not migrate bridge service: %@", oldService);
 		}
 	}
 done:
@@ -2504,7 +2914,7 @@ done:
 static void
 _SCNetworkMigrationRemoveBridgeServices(SCPreferencesRef prefs)
 {
-	CFArrayRef services = SCNetworkServiceCopyAll(prefs);
+	CFArrayRef	services	= SCNetworkServiceCopyAll(prefs);
 
 	for (CFIndex idx = 0; idx < CFArrayGetCount(services); idx++) {
 		SCNetworkServiceRef service = CFArrayGetValueAtIndex(services, idx);
@@ -2513,7 +2923,7 @@ _SCNetworkMigrationRemoveBridgeServices(SCPreferencesRef prefs)
 
 		if ((bsdName != NULL) &&
 		    (SCNetworkInterfaceGetInterfaceType(interface) == kSCNetworkInterfaceTypeBridge)) {
-			SC_log(LOG_INFO, "Removing service: %@", service);
+			SC_log(LOG_INFO, "removing service: %@", service);
 			SCNetworkServiceRemove(service);
 		}
 	}
@@ -2524,8 +2934,8 @@ _SCNetworkMigrationRemoveBridgeServices(SCPreferencesRef prefs)
 static CFDictionaryRef
 _SCNetworkMigrationCopyMappingBSDNameToBridgeServices(SCPreferencesRef prefs)
 {
-	CFArrayRef services = SCNetworkServiceCopyAll(prefs);
-	CFMutableDictionaryRef bridgeServices = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	CFArrayRef		services	= SCNetworkServiceCopyAll(prefs);
+	CFMutableDictionaryRef	bridgeServices	= CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
 	for (CFIndex idx = 0; idx < CFArrayGetCount(services); idx++) {
 		SCNetworkServiceRef service = CFArrayGetValueAtIndex(services, idx);
@@ -2550,24 +2960,24 @@ _SCNetworkMigrationCopyMappingBSDNameToBridgeServices(SCPreferencesRef prefs)
 
 
 static Boolean
-_SCNetworkMigrationDoBridgeMigration (SCPreferencesRef sourcePrefs,
-				      SCPreferencesRef sourceNIPrefs,
-				      SCPreferencesRef targetPrefs,
-				      SCPreferencesRef targetNIPrefs,
-				      CFDictionaryRef bsdMapping,
-				      CFDictionaryRef setMapping,
-				      CFDictionaryRef serviceSetMapping)
+_SCNetworkMigrationDoBridgeMigration(SCPreferencesRef	sourcePrefs,
+				     SCPreferencesRef	sourceNIPrefs,
+				     SCPreferencesRef	targetPrefs,
+				     SCPreferencesRef	targetNIPrefs,
+				     CFDictionaryRef	bsdNameMapping,
+				     CFDictionaryRef	setMapping,
+				     CFDictionaryRef	serviceSetMapping)
 {
 #pragma unused(sourceNIPrefs)
-	CFArrayRef allSourceBridges;
-	CFArrayRef allTargetBridges;
-	SCBridgeInterfaceRef bridge;
-	CFMutableDictionaryRef bridgeInterfaceMapping = NULL;
-	CFMutableDictionaryRef bridgeMapping;
-	CFDictionaryRef bsdNameToBridgeServices;
-	SCVirtualInterfaceContext context;
-	CFIndex count = 0;
-	Boolean success = FALSE;
+	CFArrayRef		allSourceBridges;
+	CFArrayRef		allTargetBridges;
+	SCBridgeInterfaceRef	bridge;
+	CFMutableDictionaryRef	bridgeInterfaceMapping	= NULL;
+	CFMutableDictionaryRef	bridgeMapping;
+	CFDictionaryRef		bsdNameToBridgeServices;
+	virtualInterfaceContext	context;
+	CFIndex			count			= 0;
+	Boolean			success			= FALSE;
 
 	allSourceBridges = SCBridgeInterfaceCopyAll(sourcePrefs);
 	allTargetBridges = SCBridgeInterfaceCopyAll(targetPrefs);
@@ -2591,7 +3001,7 @@ _SCNetworkMigrationDoBridgeMigration (SCPreferencesRef sourcePrefs,
 			interface = CFArrayGetValueAtIndex(bridgeMembers, idx2);
 			interfaceName = SCNetworkInterfaceGetBSDName(interface);
 
-			if (CFDictionaryContainsKey(bsdMapping, interfaceName)) {
+			if (CFDictionaryContainsKey(bsdNameMapping, interfaceName)) {
 				CFStringRef bridgeNewName = CFStringCreateWithFormat(NULL, NULL, CFSTR("bridge%ld"), count);
 				CFDictionaryAddValue(bridgeMapping, interfaceName, bridgeNewName);
 				CFArrayAppendValue(interfaceList, interfaceName);
@@ -2611,15 +3021,15 @@ _SCNetworkMigrationDoBridgeMigration (SCPreferencesRef sourcePrefs,
 	for (CFIndex idx = 0; idx < CFArrayGetCount(allTargetBridges); idx++) {
 		bridge = CFArrayGetValueAtIndex(allTargetBridges, idx);
 		if (!SCBridgeInterfaceRemove(bridge)) {
-			SC_log(LOG_INFO, "SCBridgeInterfaceRemove() failed: %@", bridge);
+			SC_log(LOG_NOTICE, "SCBridgeInterfaceRemove() failed: %@", bridge);
 			goto done;
 		}
 	}
 
 	context.prefs = targetPrefs;
 	context.ni_prefs = targetNIPrefs;
-	context.bsdMapping = bsdMapping;
-	context.virtualBSDMapping = bridgeMapping;
+	context.bsdNameMapping = bsdNameMapping;
+	context.virtualBSDNameMapping = bridgeMapping;
 	context.mappingBSDNameToService = bsdNameToBridgeServices;
 	context.setMapping = setMapping;
 	context.serviceSetMapping = serviceSetMapping;
@@ -2641,26 +3051,26 @@ done:
 static void
 add_target_bond(const void *key, const void *value, void *context)
 {
-	CFNumberRef bondMode;
-	CFStringRef bondName;
-	CFDictionaryRef bondOptions;
-	SCVirtualInterfaceContext *ctx = (SCVirtualInterfaceContext*)context;
-	CFDictionaryRef bondBSDNameMapping = ctx->virtualBSDMapping;
-	CFDictionaryRef bsdNameToServiceMapping = ctx->mappingBSDNameToService;
-	SCVirtualInterfaceMemberListContext memberListContext;
-	CFMutableArrayRef newInterfaceList;
-	SCBondInterfaceRef newBond;
-	SCBondInterfaceRef oldBond = (SCBondInterfaceRef)key;
-	CFStringRef oldBSDName;
-	CFArrayRef oldInterfaceList = (CFArrayRef)value;
-	CFArrayRef oldServiceList;
-	SCPreferencesRef prefs = ctx->prefs;
-	CFDictionaryRef serviceSetMapping = ctx->serviceSetMapping;
-	CFDictionaryRef setMapping = ctx->setMapping;
+	CFNumberRef				bondMode;
+	CFStringRef				bondName;
+	CFDictionaryRef				bondOptions;
+	virtualInterfaceContext			*ctx			= (virtualInterfaceContext*)context;
+	CFDictionaryRef				bondBSDNameMapping	= ctx->virtualBSDNameMapping;
+	CFDictionaryRef				bsdNameToServiceMapping	= ctx->mappingBSDNameToService;
+	virtualInterfaceMemberListContext	memberListContext;
+	CFMutableArrayRef			newInterfaceList;
+	SCBondInterfaceRef			newBond;
+	SCBondInterfaceRef			oldBond			= (SCBondInterfaceRef)key;
+	CFStringRef				oldBSDName;
+	CFArrayRef				oldInterfaceList	= (CFArrayRef)value;
+	CFArrayRef				oldServiceList;
+	SCPreferencesRef			prefs			= ctx->prefs;
+	CFDictionaryRef				serviceSetMapping	= ctx->serviceSetMapping;
+	CFDictionaryRef				setMapping		= ctx->setMapping;
 
 	newInterfaceList = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
 
-	memberListContext.bsdMapping = ctx->bsdMapping;
+	memberListContext.bsdNameMapping = ctx->bsdNameMapping;
 	memberListContext.interfaceList = newInterfaceList;
 	memberListContext.ni_prefs = ctx->ni_prefs;
 
@@ -2668,7 +3078,7 @@ add_target_bond(const void *key, const void *value, void *context)
 
 	newBond = SCBondInterfaceCreate(prefs);
 	if (!__SCBondInterfaceSetMemberInterfaces(newBond, newInterfaceList)) {
-		SC_log(LOG_INFO, "__SCBondInterfaceSetMemberInterfaces() failed");
+		SC_log(LOG_NOTICE, "__SCBondInterfaceSetMemberInterfaces() failed");
 	}
 	CFRelease(newInterfaceList);
 
@@ -2699,7 +3109,7 @@ add_target_bond(const void *key, const void *value, void *context)
 	for (CFIndex idx = 0; idx < CFArrayGetCount(oldServiceList); idx++) {
 		SCNetworkServiceRef oldService = CFArrayGetValueAtIndex(oldServiceList, idx);
 		if (!__SCNetworkServiceMigrateNew(prefs, oldService, bondBSDNameMapping, setMapping, serviceSetMapping)) {
-			SC_log(LOG_INFO, "Could not migrate Bond service: %@", oldService);
+			SC_log(LOG_NOTICE, "could not migrate bond service: %@", oldService);
 		}
 	}
 done:
@@ -2728,8 +3138,8 @@ _SCNetworkMigrationRemoveBondServices(SCPreferencesRef prefs)
 static CFDictionaryRef
 _SCNetworkMigrationCopyMappingBSDNameToBondServices(SCPreferencesRef prefs)
 {
-	CFArrayRef services = SCNetworkServiceCopyAll(prefs);
-	CFMutableDictionaryRef bondServices = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	CFArrayRef		services	= SCNetworkServiceCopyAll(prefs);
+	CFMutableDictionaryRef	bondServices	= CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
 	for (CFIndex idx = 0; idx < CFArrayGetCount(services); idx++) {
 		SCNetworkServiceRef service = CFArrayGetValueAtIndex(services, idx);
@@ -2754,24 +3164,24 @@ _SCNetworkMigrationCopyMappingBSDNameToBondServices(SCPreferencesRef prefs)
 
 
 static Boolean
-_SCNetworkMigrationDoBondMigration (SCPreferencesRef sourcePrefs,
-				    SCPreferencesRef sourceNIPrefs,
-				    SCPreferencesRef targetPrefs,
-				    SCPreferencesRef targetNIPrefs,
-				    CFDictionaryRef bsdMapping,
-				    CFDictionaryRef setMapping,
-				    CFDictionaryRef serviceSetMapping)
+_SCNetworkMigrationDoBondMigration(SCPreferencesRef	sourcePrefs,
+				   SCPreferencesRef	sourceNIPrefs,
+				   SCPreferencesRef	targetPrefs,
+				   SCPreferencesRef	targetNIPrefs,
+				   CFDictionaryRef	bsdNameMapping,
+				   CFDictionaryRef	setMapping,
+				   CFDictionaryRef	serviceSetMapping)
 {
 #pragma unused(sourceNIPrefs)
-	CFArrayRef allSourceBonds;
-	CFArrayRef allTargetBonds;
-	SCBondInterfaceRef bond;
-	CFMutableDictionaryRef bondInterfaceMapping = NULL;
-	CFMutableDictionaryRef bondMapping;
-	CFDictionaryRef bsdNameToBondServices;
-	SCVirtualInterfaceContext context;
-	CFIndex count = 0;
-	Boolean success = FALSE;
+	CFArrayRef		allSourceBonds;
+	CFArrayRef		allTargetBonds;
+	SCBondInterfaceRef	bond;
+	CFMutableDictionaryRef	bondInterfaceMapping	= NULL;
+	CFMutableDictionaryRef	bondMapping;
+	CFDictionaryRef		bsdNameToBondServices;
+	virtualInterfaceContext	context;
+	CFIndex			count			= 0;
+	Boolean			success			= FALSE;
 
 	allSourceBonds = SCBondInterfaceCopyAll(sourcePrefs);
 	allTargetBonds = SCBondInterfaceCopyAll(targetPrefs);
@@ -2794,7 +3204,7 @@ _SCNetworkMigrationDoBondMigration (SCPreferencesRef sourcePrefs,
 			interface = CFArrayGetValueAtIndex(bondMembers, idx2);
 			interfaceName = SCNetworkInterfaceGetBSDName(interface);
 
-			if (CFDictionaryContainsKey(bsdMapping, interfaceName)) {
+			if (CFDictionaryContainsKey(bsdNameMapping, interfaceName)) {
 				CFStringRef bondNewName = CFStringCreateWithFormat(NULL, NULL, CFSTR("bond%ld"), count);
 				CFDictionaryAddValue(bondMapping, interfaceName, bondNewName);
 				CFArrayAppendValue(interfaceList, interfaceName);
@@ -2814,15 +3224,15 @@ _SCNetworkMigrationDoBondMigration (SCPreferencesRef sourcePrefs,
 	for (CFIndex idx = 0; idx < CFArrayGetCount(allTargetBonds); idx++) {
 		bond = CFArrayGetValueAtIndex(allTargetBonds, idx);
 		if (!SCBondInterfaceRemove(bond)) {
-			SC_log(LOG_INFO, "SCBondInterfaceRemove() failed: %@", bond);
+			SC_log(LOG_NOTICE, "SCBondInterfaceRemove() failed: %@", bond);
 			goto done;
 		}
 	}
 
 	context.prefs = targetPrefs;
 	context.ni_prefs = targetNIPrefs;
-	context.bsdMapping = bsdMapping;
-	context.virtualBSDMapping = bondMapping;
+	context.bsdNameMapping = bsdNameMapping;
+	context.virtualBSDNameMapping = bondMapping;
 	context.mappingBSDNameToService = bsdNameToBondServices;
 	context.setMapping = setMapping;
 	context.serviceSetMapping = serviceSetMapping;
@@ -2843,60 +3253,60 @@ done:
 static void
 add_target_vlan(const void *value, void *context)
 {
-	CFDictionaryRef bsdMapping;
-	SCVirtualInterfaceContext *ctx = (SCVirtualInterfaceContext*)context;
-	CFDictionaryRef bsdNameToServiceMapping = ctx->mappingBSDNameToService;
-	SCPreferencesRef prefs = ctx->prefs;
-	SCVLANInterfaceRef newVLAN = NULL;
-	SCNetworkInterfaceRef newPhysicalInterface = NULL;
-	CFStringRef newPhysicalInterfaceName;
-	SCVLANInterfaceRef oldVLAN = (SCVLANInterfaceRef)value;
-	CFStringRef oldBSDName;
-	SCNetworkInterfaceRef oldPhysicalInterface;
-	CFStringRef oldPhysicalInterfaceName;
-	SCNetworkServiceRef oldService;
-	CFArrayRef oldServiceList;
-	CFDictionaryRef serviceSetMapping = ctx->serviceSetMapping;
-	CFDictionaryRef setMapping = ctx->setMapping;
-	CFDictionaryRef vlanBSDMapping = ctx->virtualBSDMapping;
-	CFNumberRef vlanTag;
-	CFStringRef vlanName;
-	CFDictionaryRef vlanOptions;
+	CFDictionaryRef		bsdNameMapping;
+	virtualInterfaceContext	*ctx			= (virtualInterfaceContext*)context;
+	CFDictionaryRef		bsdNameToServiceMapping	= ctx->mappingBSDNameToService;
+	SCPreferencesRef	prefs			= ctx->prefs;
+	SCVLANInterfaceRef	newVLAN			= NULL;
+	SCNetworkInterfaceRef	newPhysicalInterface	= NULL;
+	CFStringRef		newPhysicalInterfaceName;
+	SCVLANInterfaceRef	oldVLAN			= (SCVLANInterfaceRef)value;
+	CFStringRef		oldBSDName;
+	SCNetworkInterfaceRef	oldPhysicalInterface;
+	CFStringRef		oldPhysicalInterfaceName;
+	SCNetworkServiceRef	oldService;
+	CFArrayRef		oldServiceList;
+	CFDictionaryRef		serviceSetMapping	= ctx->serviceSetMapping;
+	CFDictionaryRef		setMapping		= ctx->setMapping;
+	CFDictionaryRef		vlanBSDNameMapping	= ctx->virtualBSDNameMapping;
+	CFNumberRef		vlanTag;
+	CFStringRef		vlanName;
+	CFDictionaryRef		vlanOptions;
 
-	bsdMapping = ctx->bsdMapping;
+	bsdNameMapping = ctx->bsdNameMapping;
 
 	oldPhysicalInterface = SCVLANInterfaceGetPhysicalInterface(oldVLAN);
 	if (oldPhysicalInterface == NULL) {
-		SC_log(LOG_INFO, "No old VLAN physical interface");
+		SC_log(LOG_NOTICE, "No old VLAN physical interface");
 		goto done;
 	}
 
 	oldPhysicalInterfaceName = SCNetworkInterfaceGetBSDName(oldPhysicalInterface);
 	if (oldPhysicalInterfaceName == NULL) {
-		SC_log(LOG_INFO, "No old VLAN physical interface name");
+		SC_log(LOG_NOTICE, "No old VLAN physical interface name");
 		goto done;
 	}
 
-	newPhysicalInterfaceName = CFDictionaryGetValue(bsdMapping, oldPhysicalInterfaceName);
+	newPhysicalInterfaceName = CFDictionaryGetValue(bsdNameMapping, oldPhysicalInterfaceName);
 	if (newPhysicalInterfaceName == NULL) {
-		SC_log(LOG_INFO, "No new VLAN physical interface name");
+		SC_log(LOG_NOTICE, "No new VLAN physical interface name");
 		goto done;
 	}
 	newPhysicalInterface = __SCNetworkInterfaceCreateWithNIPreferencesUsingBSDName(NULL, ctx->ni_prefs, newPhysicalInterfaceName);
 	if (newPhysicalInterface == NULL) {
-		SC_log(LOG_INFO, "Could not create new VLAN physical interface");
+		SC_log(LOG_NOTICE, "Could not create new VLAN physical interface");
 		goto done;
 	}
 
 	vlanTag = SCVLANInterfaceGetTag(oldVLAN);
 	if (vlanTag == NULL) {
-		SC_log(LOG_INFO, "No old VLAN interface tag");
+		SC_log(LOG_NOTICE, "No old VLAN interface tag");
 		goto done;
 	}
 
 	newVLAN = SCVLANInterfaceCreate(prefs, newPhysicalInterface, vlanTag);
 	if (newVLAN == NULL) {
-		SC_log(LOG_INFO, "Could not create new VLAN interface");
+		SC_log(LOG_NOTICE, "Could not create new VLAN interface");
 		goto done;
 	}
 
@@ -2922,8 +3332,8 @@ add_target_vlan(const void *value, void *context)
 
 	for (CFIndex idx = 0; idx < CFArrayGetCount(oldServiceList); idx++) {
 		oldService = CFArrayGetValueAtIndex(oldServiceList, idx);
-		if (!__SCNetworkServiceMigrateNew(prefs, oldService, vlanBSDMapping, setMapping, serviceSetMapping)) {
-			SC_log(LOG_INFO, "Could not migrate VLAN service: %@", oldService);
+		if (!__SCNetworkServiceMigrateNew(prefs, oldService, vlanBSDNameMapping, setMapping, serviceSetMapping)) {
+			SC_log(LOG_NOTICE, "Could not migrate VLAN service: %@", oldService);
 		}
 	}
 
@@ -2984,24 +3394,24 @@ _SCNetworkMigrationCopyMappingBSDNameToVLANServices(SCPreferencesRef prefs)
 }
 
 static Boolean
-_SCNetworkMigrationDoVLANMigration (SCPreferencesRef sourcePrefs,
-				    SCPreferencesRef sourceNIPrefs,
-				    SCPreferencesRef targetPrefs,
-				    SCPreferencesRef targetNIPrefs,
-				    CFDictionaryRef bsdMapping,
-				    CFDictionaryRef setMapping,
-				    CFDictionaryRef serviceSetMapping)
+_SCNetworkMigrationDoVLANMigration(SCPreferencesRef	sourcePrefs,
+				   SCPreferencesRef	sourceNIPrefs,
+				   SCPreferencesRef	targetPrefs,
+				   SCPreferencesRef	targetNIPrefs,
+				   CFDictionaryRef	bsdNameMapping,
+				   CFDictionaryRef	setMapping,
+				   CFDictionaryRef	serviceSetMapping)
 {
 #pragma unused(sourceNIPrefs)
-	CFArrayRef allSourceVLAN;
-	CFArrayRef allTargetVLAN;
-	SCVirtualInterfaceContext context;
-	CFIndex count = 0;
-	Boolean success = FALSE;
-	SCVLANInterfaceRef vlan;
-	CFMutableArrayRef vlanList;
-	CFMutableDictionaryRef vlanMapping;
-	CFDictionaryRef bsdNameToVLANServices;
+	CFArrayRef		allSourceVLAN;
+	CFArrayRef		allTargetVLAN;
+	virtualInterfaceContext	context;
+	CFIndex			count		= 0;
+	Boolean			success		= FALSE;
+	SCVLANInterfaceRef	vlan;
+	CFMutableArrayRef	vlanList;
+	CFMutableDictionaryRef	vlanMapping;
+	CFDictionaryRef		bsdNameToVLANServices;
 
 	allSourceVLAN = SCVLANInterfaceCopyAll(sourcePrefs);
 	allTargetVLAN = SCVLANInterfaceCopyAll(targetPrefs);
@@ -3015,15 +3425,10 @@ _SCNetworkMigrationDoVLANMigration (SCPreferencesRef sourcePrefs,
 		vlan = CFArrayGetValueAtIndex(allSourceVLAN, idx);
 		CFStringRef vlanBSDName = SCNetworkInterfaceGetBSDName(vlan);
 		SCNetworkInterfaceRef physicalInterface = SCVLANInterfaceGetPhysicalInterface(vlan);
-		CFStringRef physicalInterfaceName;
-
-		SC_log(LOG_DEBUG, "physical VLAN interface: %@", physicalInterface);
-
-		physicalInterfaceName = SCNetworkInterfaceGetBSDName(physicalInterface);
-		SC_log(LOG_DEBUG, "physical VLAN interface name: %@", physicalInterfaceName);
+		CFStringRef physicalInterfaceName = SCNetworkInterfaceGetBSDName(physicalInterface);
 
 		// Add VLAN to be migrated if the mapping between interfaces exists
-		if (CFDictionaryContainsKey(bsdMapping, physicalInterfaceName)) {
+		if (CFDictionaryContainsKey(bsdNameMapping, physicalInterfaceName)) {
 			CFStringRef vlanNewName = CFStringCreateWithFormat(NULL, NULL, CFSTR("vlan%ld"), count);
 			CFDictionaryAddValue(vlanMapping, vlanBSDName, vlanNewName);
 			CFArrayAppendValue(vlanList, vlan);
@@ -3038,15 +3443,15 @@ _SCNetworkMigrationDoVLANMigration (SCPreferencesRef sourcePrefs,
 	for (CFIndex idx = 0; idx < CFArrayGetCount(allTargetVLAN); idx++) {
 		vlan = CFArrayGetValueAtIndex(allTargetVLAN, idx);
 		if (!SCVLANInterfaceRemove(vlan)) {
-			SC_log(LOG_INFO, "SCVLANInterfaceRemove() failed: %@", vlan);
+			SC_log(LOG_NOTICE, "SCVLANInterfaceRemove() failed: %@", vlan);
 			goto done;
 		}
 	}
 
 	context.prefs = targetPrefs;
 	context.ni_prefs = targetNIPrefs;
-	context.bsdMapping = bsdMapping;
-	context.virtualBSDMapping = vlanMapping;
+	context.bsdNameMapping = bsdNameMapping;
+	context.virtualBSDNameMapping = vlanMapping;
 	context.mappingBSDNameToService = bsdNameToVLANServices;
 	context.setMapping = setMapping;
 	context.serviceSetMapping = serviceSetMapping;
@@ -3069,53 +3474,54 @@ _SCNetworkMigrationDoVirtualNetworkInterfaceMigration(SCPreferencesRef sourcePre
 						      SCPreferencesRef sourceNIPrefs,
 						      SCPreferencesRef targetPrefs,
 						      SCPreferencesRef targetNIPrefs,
-						      CFDictionaryRef bsdMapping,
+						      CFDictionaryRef bsdNameMapping,
 						      CFDictionaryRef setMapping,
 						      CFDictionaryRef serviceSetMapping)
 {
 	// Handle Bridges
 	if (!_SCNetworkMigrationDoBridgeMigration(sourcePrefs, sourceNIPrefs,
 						 targetPrefs, targetNIPrefs,
-						 bsdMapping, setMapping, serviceSetMapping)) {
-		SC_log(LOG_INFO, "Bridge migration failed");
+						 bsdNameMapping, setMapping, serviceSetMapping)) {
+		SC_log(LOG_NOTICE, "Bridge migration failed");
 	}
 
 	// Handle Bonds
 	if (!_SCNetworkMigrationDoBondMigration(sourcePrefs, sourceNIPrefs,
 					       targetPrefs, targetNIPrefs,
-					       bsdMapping, setMapping, serviceSetMapping)) {
-		SC_log(LOG_INFO, "Bond migration failed");
+					       bsdNameMapping, setMapping, serviceSetMapping)) {
+		SC_log(LOG_NOTICE, "Bond migration failed");
 	}
 
 	// Handle VLANs
 	if (!_SCNetworkMigrationDoVLANMigration(sourcePrefs, sourceNIPrefs,
 					       targetPrefs, targetNIPrefs,
-					       bsdMapping, setMapping, serviceSetMapping)) {
-		SC_log(LOG_INFO, "VLAN migration failed");
+					       bsdNameMapping, setMapping, serviceSetMapping)) {
+		SC_log(LOG_NOTICE, "VLAN migration failed");
 	}
 	return TRUE;
 }
 #endif	// !TARGET_OS_IPHONE
 
 typedef struct {
-	SCPreferencesRef prefs;
-	CFArrayRef serviceOrder;
-	CFMutableArrayRef serviceListMutable;
-	Boolean* success;
+	SCPreferencesRef	prefs;
+	CFArrayRef		serviceOrder;
+	CFMutableArrayRef	serviceOrderMutable;
+	Boolean			*success;
 } migrated_service_context;
 
 static void
 create_migrated_order(const void *value, void *context)
 {
-	migrated_service_context *ctx = (migrated_service_context*)context;
-	CFMutableArrayRef migratedServiceOrder = ctx->serviceListMutable;
-	CFArrayRef targetServiceOrder = ctx->serviceOrder;
-	CFStringRef migratedServiceID = (CFStringRef)value;
-	Boolean *success = ctx->success;
+	migrated_service_context	*ctx			= (migrated_service_context*)context;
+	CFMutableArrayRef		migratedServiceOrder	= ctx->serviceOrderMutable;
+	CFArrayRef			targetServiceOrder	= ctx->serviceOrder;
+	CFStringRef			migratedServiceID	= (CFStringRef)value;
+	Boolean				*success		= ctx->success;
 
 	if (*success == FALSE) {
 		return;
 	}
+
 	// Preserving the service order in the source configuration for the services
 	// which were migrated into the target configuration
 	for (CFIndex idx = 0; idx < CFArrayGetCount(targetServiceOrder); idx++) {
@@ -3127,28 +3533,36 @@ create_migrated_order(const void *value, void *context)
 	}
 }
 
+typedef struct {
+	SCPreferencesRef	prefs;
+	CFMutableArrayRef	serviceListMutable;
+	CFArrayRef		serviceOrder;
+	Boolean			*success;
+} non_migrated_service_context;
+
 static void
 create_non_migrated_service_list(const void *value, void *context)
 {
-	migrated_service_context *ctx = (migrated_service_context*)context;
-	CFArrayRef migratedServiceOrder = ctx->serviceOrder;
-	CFMutableArrayRef nonMigratedService = ctx->serviceListMutable;
-	SCPreferencesRef prefs = ctx->prefs;
-	SCNetworkServiceRef service;
-	Boolean *success = ctx->success;
-	CFStringRef targetServiceID = (CFStringRef)value;
+	non_migrated_service_context	*ctx			= (non_migrated_service_context*)context;
+	CFArrayRef			migratedServiceOrder	= ctx->serviceOrder;
+	CFMutableArrayRef		nonMigratedService	= ctx->serviceListMutable;
+	SCPreferencesRef		prefs			= ctx->prefs;
+	SCNetworkServiceRef		service;
+	Boolean				*success		= ctx->success;
+	CFStringRef			targetServiceID		= (CFStringRef)value;
 
 	if (*success == FALSE) {
 		return;
 	}
-	// Adding all services not present in migratedServiceOrder into nonMigrated service
-	for (CFIndex idx = 0; idx < CFArrayGetCount(migratedServiceOrder); idx++) {
-		CFStringRef migratedServiceID = CFArrayGetValueAtIndex(migratedServiceOrder, idx);
 
-		if (CFEqual(targetServiceID, migratedServiceID)) {
-			return;
-		}
+	// Adding all services not present in migratedServiceOrder into nonMigrated service
+	if (CFArrayGetFirstIndexOfValue(migratedServiceOrder,
+					CFRangeMake(0, CFArrayGetCount(migratedServiceOrder)),
+					targetServiceID) != kCFNotFound) {
+		// if service already present
+		return;
 	}
+
 	service = SCNetworkServiceCopy(prefs, targetServiceID);
 	if (service == NULL) {
 		*success = FALSE;
@@ -3162,16 +3576,16 @@ create_non_migrated_service_list(const void *value, void *context)
 static void
 preserve_service_order(const void *key, const void *value, void *context)
 {
-	migrated_service_context migrated_context;
-	CFMutableArrayRef migratedServiceOrder;
-	migrated_service_context non_migrated_context;
-	CFMutableArrayRef nonMigratedServices;
-	SCNetworkSetRef sourceSet = (SCNetworkSetRef)key;
-	CFArrayRef sourceServiceOrder = NULL;
-	Boolean *success = (Boolean*)context;
-	SCNetworkSetRef targetSet = (SCNetworkSetRef)value;
-	SCNetworkSetPrivateRef targetPrivate = (SCNetworkSetPrivateRef)targetSet;
-	CFArrayRef targetServiceOrder = NULL;
+	migrated_service_context	migrated_context;
+	CFMutableArrayRef		migratedServiceOrder;
+	non_migrated_service_context	non_migrated_context;
+	CFMutableArrayRef		nonMigratedServices;
+	SCNetworkSetRef			sourceSet		= (SCNetworkSetRef)key;
+	CFArrayRef			sourceServiceOrder	= NULL;
+	Boolean				*success		= (Boolean*)context;
+	SCNetworkSetRef			targetSet		= (SCNetworkSetRef)value;
+	SCNetworkSetPrivateRef		targetPrivate		= (SCNetworkSetPrivateRef)targetSet;
+	CFArrayRef			targetServiceOrder	= NULL;
 
 	if (*success == FALSE) {
 		return;
@@ -3191,11 +3605,11 @@ preserve_service_order(const void *key, const void *value, void *context)
 
 	migrated_context.prefs = NULL;
 	migrated_context.serviceOrder = targetServiceOrder;
-	migrated_context.serviceListMutable = migratedServiceOrder;
+	migrated_context.serviceOrderMutable = migratedServiceOrder;
 	migrated_context.success = success;
 
 	// Creating a list of service IDs which were migrated in the target set
-	// while maintaining the service order or the source set
+	// while maintaining the service order of the source set
 	CFArrayApplyFunction(sourceServiceOrder, CFRangeMake(0, CFArrayGetCount(sourceServiceOrder)), create_migrated_order, &migrated_context);
 	if (*success == FALSE) {
 		goto done;
@@ -3206,8 +3620,8 @@ preserve_service_order(const void *key, const void *value, void *context)
 	non_migrated_context.serviceListMutable = nonMigratedServices;
 	non_migrated_context.success = success;
 
-	// Creating a list of all the services which were not migrated from the source set to the
-	// target set
+	// Creating a list of all the services which were not migrated from the
+	// source set to the target set
 	CFArrayApplyFunction(targetServiceOrder, CFRangeMake(0, CFArrayGetCount(targetServiceOrder)), create_non_migrated_service_list, &non_migrated_context);
 
 	// Remove non migrated service
@@ -3215,13 +3629,29 @@ preserve_service_order(const void *key, const void *value, void *context)
 		SCNetworkServiceRef service = CFArrayGetValueAtIndex(nonMigratedServices, idx);
 		SCNetworkSetRemoveService(targetSet, service);
 	}
+
 	// Set migrated service order
 	SCNetworkSetSetServiceOrder(targetSet, migratedServiceOrder);
 
 	// Add non migrated services
 	for (CFIndex idx = 0; idx < CFArrayGetCount(nonMigratedServices); idx++) {
-		SCNetworkServiceRef service = CFArrayGetValueAtIndex(nonMigratedServices, idx);
-		(void)SCNetworkSetAddService(targetSet, service);
+		Boolean			ok;
+		SCNetworkServiceRef	service;
+
+		service = CFArrayGetValueAtIndex(nonMigratedServices, idx);
+		ok = SCNetworkSetAddService(targetSet, service);
+		if (!ok) {
+			CFStringRef		bsdName;
+			SCNetworkInterfaceRef	interface;
+
+			interface = SCNetworkServiceGetInterface(service);
+			bsdName = SCNetworkInterfaceGetBSDName(interface);
+			SC_log(LOG_NOTICE, "preserve_service_order():  could not add service: %s"
+					   "\n  serviceID = %@, interface = %@",
+			       SCErrorString(SCError()),
+			       SCNetworkServiceGetServiceID(service),
+			       bsdName != NULL ? bsdName : CFSTR("?"));
+		}
 	}
 
 done:
@@ -3232,21 +3662,19 @@ done:
 }
 
 static Boolean
-_SCNetworkMigrationDoServiceOrderMigration(SCPreferencesRef sourcePrefs,
-					   SCPreferencesRef targetPrefs,
-					   CFDictionaryRef setMapping)
+_SCNetworkMigrationDoServiceOrderMigration(SCPreferencesRef	sourcePrefs,
+					   SCPreferencesRef	targetPrefs,
+					   CFDictionaryRef	setMapping)
 {
 #pragma unused(sourcePrefs)
 #pragma unused(targetPrefs)
 	Boolean success = TRUE;
 
 	if (!isA_CFDictionary(setMapping)) {
-		success = FALSE;
-		goto done;
+		return FALSE;
 	}
 
 	CFDictionaryApplyFunction(setMapping, preserve_service_order, &success);
-done:
 	return success;
 }
 
@@ -3257,41 +3685,42 @@ done:
 static Boolean
 _SCNetworkConfigurationMigrateConfiguration(CFURLRef sourceDir, CFURLRef targetDir)
 {
-	CFDictionaryRef bsdNameMapping = NULL;			// Mapping between BSD name and SCNetworkInterfaceRef to help with mapping services
-	CFMutableDictionaryRef builtinMapping = NULL;		// Mapping between builtin interfaces between source and target configurations: (SCNetworkInterfaceRef -> SCNetworkInterfaceRef)
-	CFMutableDictionaryRef externalMapping = NULL;		// Mapping between external interfaces between source and target configurations: (SCNetworkInterfaceRef -> SCNetworkInterfaceRef)
-	Boolean migrationSuccess = FALSE;
-	CFArrayRef newTargetNetworkInterfaceEntity = NULL;	// Array of Interface Entity which used to create new target interfaces created during migration
-	CFDictionaryRef serviceMapping = NULL;			// Mapping between services of source to target. (SCNetworkServicesRef -> SCNetworkServicesRef)
-	CFDictionaryRef setMapping = NULL;
-	CFDictionaryRef sourceServiceSetMapping = NULL;
-	CFArrayRef sourceConfigurationFiles = NULL;		// Path to the source configuration files which need to be migrated
-	CFStringRef sourceModel = NULL;
-	CFURLRef sourceNetworkInterfaceFile = NULL;		// Source CFURLRef for preferences.plist and NetworkInterfaces.plist
-	char sourceNetworkInterfaceFileStr[PATH_MAX];
-	CFStringRef sourceNetworkInterfaceFileString = NULL;	// Source CFStringRef for preferences.plist and NetworkInterfaces.plist
-	SCPreferencesRef sourceNetworkInterfacePrefs = NULL;	// Source SCPreferencesRef for preferences.plist and NetworkInterfaces.plist
-	CFURLRef sourcePreferencesFile = NULL;
-	char sourcePreferencesFileStr[PATH_MAX];
-	CFStringRef sourcePreferencesFileString = NULL;
-	SCPreferencesRef sourcePrefs = NULL;
-	CFArrayRef targetConfigurationFiles = NULL;		// Path to the target configuration files where migration will take place to
-	Boolean targetConfigurationFilesPresent;
-	CFStringRef targetModel = NULL;
-	CFURLRef targetNetworkInterfaceFile = NULL;		// Target CFURLRef for preferences.plist and NetworkInterfaces.plist
-	char targetNetworkInterfaceFileStr[PATH_MAX];
-	CFStringRef targetNetworkInterfaceFileString = NULL;	// Target CFStringRef for preferences.plist and NetworkInterfaces.plist
-	SCPreferencesRef targetNetworkInterfacePrefs = NULL;	// Target SCPreferencesRef for preferences.plist and NetworkInterfaces.plist
-	CFURLRef targetPreferencesFile = NULL;
-	char targetPreferencesFileStr[PATH_MAX];
-	CFStringRef targetPreferencesFileString = NULL;
-	SCPreferencesRef targetPrefs = NULL;
-	Boolean isUpgradeScenario = FALSE;
-	CFMutableDictionaryRef validityOptions = NULL;
+	CFDictionaryRef		bsdNameMapping				= NULL;	// Mapping between BSD name and SCNetworkInterfaceRef to help with mapping services
+	CFMutableDictionaryRef	builtinMapping				= NULL;	// Mapping between builtin interfaces between source and target configurations: (SCNetworkInterfaceRef -> SCNetworkInterfaceRef)
+	CFMutableDictionaryRef	externalMapping				= NULL;	// Mapping between external interfaces between source and target configurations: (SCNetworkInterfaceRef -> SCNetworkInterfaceRef)
+	Boolean			migrationSuccess			= FALSE;
+	CFArrayRef		newTargetNetworkInterfaceEntity		= NULL;	// Array of Interface Entity which used to create new target interfaces created during migration
+	CFDictionaryRef		serviceMapping				= NULL;	// Mapping between services of source to target. (SCNetworkServicesRef -> SCNetworkServicesRef)
+	CFDictionaryRef		setMapping				= NULL;
+	CFDictionaryRef		sourceServiceSetMapping			= NULL;
+	CFArrayRef		sourceConfigurationFiles		= NULL;	// Path to the source configuration files which need to be migrated
+	CFStringRef		sourceModel				= NULL;
+	CFURLRef		sourceNetworkInterfaceFile		= NULL;	// Source CFURLRef for preferences.plist and NetworkInterfaces.plist
+	char			sourceNetworkInterfaceFileStr[PATH_MAX];
+	CFStringRef		sourceNetworkInterfaceFileString	= NULL;	// Source CFStringRef for preferences.plist and NetworkInterfaces.plist
+	SCPreferencesRef	sourceNetworkInterfacePrefs		= NULL;	// Source SCPreferencesRef for preferences.plist and NetworkInterfaces.plist
+	CFURLRef		sourcePreferencesFile			= NULL;
+	char			sourcePreferencesFileStr[PATH_MAX];
+	CFStringRef		sourcePreferencesFileString		= NULL;
+	SCPreferencesRef	sourcePrefs				= NULL;
+	CFStringRef		suffix;
+	CFArrayRef		targetConfigurationFiles		= NULL;	// Path to the target configuration files where migration will take place to
+	Boolean			targetConfigurationFilesPresent;
+	CFStringRef		targetModel				= NULL;
+	CFURLRef		targetNetworkInterfaceFile		= NULL;	// Target CFURLRef for preferences.plist and NetworkInterfaces.plist
+	char			targetNetworkInterfaceFileStr[PATH_MAX];
+	CFStringRef		targetNetworkInterfaceFileString	= NULL;	// Target CFStringRef for preferences.plist and NetworkInterfaces.plist
+	SCPreferencesRef	targetNetworkInterfacePrefs		= NULL;	// Target SCPreferencesRef for preferences.plist and NetworkInterfaces.plist
+	CFURLRef		targetPreferencesFile			= NULL;
+	char			targetPreferencesFileStr[PATH_MAX];
+	CFStringRef		targetPreferencesFileString		= NULL;
+	SCPreferencesRef	targetPrefs				= NULL;
+	Boolean			isUpgradeScenario			= FALSE;
+	CFMutableDictionaryRef	validityOptions				= NULL;
 
 	// Check if configuration files exist in sourceDir
-	if (!__SCNetworkConfigurationMigrateConfigurationFilesPresent(sourceDir, &sourceConfigurationFiles)) {
-		SC_log(LOG_INFO, "sourceDir: (%@) doesn't contain configuration files", sourceDir);
+	if (!__SCNetworkConfigurationMigrateConfigurationFilesPresent(sourceDir, &sourceConfigurationFiles, TRUE)) {
+		SC_log(LOG_NOTICE, "sourceDir: (%@) missing configuration files", sourceDir);
 		goto done;
 	}
 
@@ -3316,13 +3745,14 @@ _SCNetworkConfigurationMigrateConfiguration(CFURLRef sourceDir, CFURLRef targetD
 		goto done;
 	}
 
-	targetConfigurationFilesPresent = __SCNetworkConfigurationMigrateConfigurationFilesPresent(targetDir, &targetConfigurationFiles);
+	targetConfigurationFilesPresent = __SCNetworkConfigurationMigrateConfigurationFilesPresent(targetDir, &targetConfigurationFiles, FALSE);
 	if (!targetConfigurationFilesPresent) {
+		// if the expected configuration files are not present in the target directory
 		if (targetConfigurationFiles == NULL) {
-			SC_log(LOG_DEBUG, "targetConfigurationFiles is NULL");
+			// but we don't know what files are needed (no target URL)
+			SC_log(LOG_NOTICE, "targetConfigurationFiles is NULL");
 			goto done;
 		}
-		SC_log(LOG_INFO, "targetDir: (%@) doesn't contain configuration files ... Need to create default configuration", targetDir);
 	}
 
 	targetPreferencesFile = CFArrayGetValueAtIndex(targetConfigurationFiles, PREFERENCES_PLIST_INDEX);
@@ -3343,40 +3773,64 @@ _SCNetworkConfigurationMigrateConfiguration(CFURLRef sourceDir, CFURLRef targetD
 		targetPrefs = SCPreferencesCreate(NULL, PLUGIN_ID, targetPreferencesFileString);
 		targetNetworkInterfacePrefs = SCPreferencesCreate(NULL, PLUGIN_ID, targetNetworkInterfaceFileString);
 		if ((targetPrefs == NULL) || (targetNetworkInterfacePrefs == NULL)) {
+			SC_log(LOG_NOTICE, "Could not open target prefs/ni_prefs");
 			goto done;
 		}
 	} else {
-		targetPrefs = __SCNetworkCreateDefaultPref(targetPreferencesFileString);
-		targetNetworkInterfacePrefs = __SCNetworkCreateDefaultNIPrefs(targetNetworkInterfaceFileString);
+		// create and populate a new preferences.plist
+		targetPrefs = SCPreferencesCreate(NULL, PLUGIN_ID, targetPreferencesFileString);
+		__SCNetworkPopulateDefaultPrefs(targetPrefs);
 
-		if (targetPrefs == NULL ||
-		    targetNetworkInterfacePrefs == NULL) {
-			SC_log(LOG_DEBUG, "Could not create default configuration");
-			goto done;
-		}
+		// create and populate a new NetworkInterfaces.plist
+		targetNetworkInterfacePrefs = SCPreferencesCreateCompanion(targetPrefs, INTERFACES_DEFAULT_CONFIG);
+		__SCNetworkPopulateDefaultNIPrefs(targetNetworkInterfacePrefs);
 	}
 	validityOptions = CFDictionaryCreateMutable(NULL, 0,
 						    &kCFTypeDictionaryKeyCallBacks,
 						    &kCFTypeDictionaryValueCallBacks);
 	CFDictionaryAddValue(validityOptions, kSCNetworkConfigurationRepair, kCFBooleanTrue);
 
-	SC_log(LOG_DEBUG, "sourcePreferenceFileString: %@\n"
-			  "sourceNetworkInterfaceFileString:%@\n"
-			  "targetPreferencesFileString:%@\n"
-			  "targetNetworkInterfaceFileString:%@",
-	       sourcePreferencesFileString,
-	       sourceNetworkInterfaceFileString,
-	       targetPreferencesFileString,
-	       targetNetworkInterfaceFileString);
-
 	// Setting Bypass Interface to avoid looking at system interfaces
-	__SCPreferencesSetLimitSCNetworkConfiguration(sourcePrefs, TRUE);
-	__SCPreferencesSetLimitSCNetworkConfiguration(targetPrefs, TRUE);
+	_SCNetworkConfigurationSetBypassSystemInterfaces(sourcePrefs, TRUE);
+	_SCNetworkConfigurationSetBypassSystemInterfaces(targetPrefs, TRUE);
 
 	sourceModel = SCPreferencesGetValue(sourcePrefs, MODEL);
 	targetModel = SCPreferencesGetValue(targetPrefs, MODEL);
+	isUpgradeScenario = (isA_CFString(sourceModel) && isA_CFString(targetModel) && CFEqual(sourceModel, targetModel));
+	if (isUpgradeScenario) {
+		SC_log(LOG_NOTICE, "Migrating network configuration: performing an \"upgrade\"");
+	} else {
+		SC_log(LOG_NOTICE, "Migrating network configuration: performing a \"migration\"");
+	}
 
-	isUpgradeScenario = (isA_CFString(sourceModel) && isA_CFString(targetModel) && CFStringCompare(sourceModel, targetModel, 0) == kCFCompareEqualTo);
+	SC_log(LOG_INFO,
+		 "  sourcePrefs                 = %@"
+	       "\n  sourceNetworkInterfacePrefs = %@"
+	       "\n  targetPrefs                 = %@%s"
+	       "\n  targetNetworkInterfacePrefs = %@%s",
+	       sourcePrefs,
+	       sourceNetworkInterfacePrefs,
+	       targetPrefs,
+	       targetConfigurationFilesPresent ? "" : ", new",
+	       targetNetworkInterfacePrefs,
+	       targetConfigurationFilesPresent ? "" : ", new");
+
+	// create backup of migration source
+	suffix = CFStringCreateWithFormat(NULL, NULL,
+					  CFSTR("pre-%s-source"),
+					  isUpgradeScenario ? "upgrade" : "migration");
+	__SCNetworkConfigurationBackup(sourcePrefs, suffix, targetPrefs);
+	__SCNetworkConfigurationBackup(sourceNetworkInterfacePrefs, suffix, targetPrefs);
+	CFRelease(suffix);
+
+	// create backup of migration target
+	suffix = CFStringCreateWithFormat(NULL, NULL,
+					  CFSTR("pre-%s-%starget"),
+					  isUpgradeScenario ? "upgrade" : "migration",
+					  targetConfigurationFilesPresent ? "" : "new-");
+	__SCNetworkConfigurationBackup(targetPrefs, suffix, targetPrefs);
+	__SCNetworkConfigurationBackup(targetNetworkInterfacePrefs, suffix, targetPrefs);
+	CFRelease(suffix);
 
 	// Create services for builtin interfaces at source if they don't exist
 	(void)_SCNetworkConfigurationCreateBuiltinInterfaceServices(sourcePrefs, sourceNetworkInterfacePrefs);
@@ -3384,7 +3838,7 @@ _SCNetworkConfigurationMigrateConfiguration(CFURLRef sourceDir, CFURLRef targetD
 	if (!_SCNetworkConfigurationCheckValidityWithPreferences(sourcePrefs,
 								 sourceNetworkInterfacePrefs,
 								 validityOptions)) {
-		SC_log(LOG_INFO, "Source configuration not valid");
+		SC_log(LOG_NOTICE, "Source configuration not valid");
 		goto skipServiceMigration;
 	}
 	// Only call this function if configuration files were not created by default
@@ -3394,17 +3848,24 @@ _SCNetworkConfigurationMigrateConfiguration(CFURLRef sourceDir, CFURLRef targetD
 		if (!_SCNetworkConfigurationCheckValidityWithPreferences(targetPrefs,
 									 targetNetworkInterfacePrefs,
 									 validityOptions)) {
-			SC_log(LOG_INFO, "Target configuration not valid");
+			SC_log(LOG_NOTICE, "Target configuration not valid");
 			goto skipServiceMigration;
 		}
 	}
-	SC_log(LOG_DEBUG, "This is %san upgrade scenario", isUpgradeScenario ? "" : "not ");
 	// Upgrade scenario, source and target models match
 	if (isUpgradeScenario) {
 		Boolean foundNewInterface = FALSE;
 		// Create SCPreferences to copy the target prefs
-		SCPreferencesRef upgradeSourcePrefs = SCPreferencesCreate(NULL, CFSTR("Upgrade Source Prefs"), NULL);
-		SCPreferencesRef upgradeSourceNIPrefs = SCPreferencesCreate(NULL, CFSTR("Upgrade Source NI Prefs"), NULL);
+		SCPreferencesRef upgradeSourcePrefs	= SCPreferencesCreate(NULL, CFSTR("Upgrade Source Prefs"), NULL);
+		SCPreferencesRef upgradeSourceNIPrefs	= SCPreferencesCreate(NULL, CFSTR("Upgrade Source NI Prefs"), INTERFACES_DEFAULT_CONFIG);
+
+		SC_log(LOG_INFO,
+		       "Migrating network configuration:"
+		       "\n  upgradeSourcePrefs [temp]   = %@"
+		       "\n  upgradeSourceNIPrefs [temp] = %@"
+		       "\n  Copying target --> upgrade, source --> target",
+		       upgradeSourcePrefs,
+		       upgradeSourceNIPrefs);
 
 		// Content of target prefs
 		CFDictionaryRef targetPrefsContent = SCPreferencesPathGetValue(targetPrefs, CFSTR("/"));
@@ -3424,104 +3885,124 @@ _SCNetworkConfigurationMigrateConfiguration(CFURLRef sourceDir, CFURLRef targetD
 
 		// Getting the mapping of the non builtin interfaces between source and target
 		externalMapping = _SCNetworkConfigurationCopyExternalInterfaceMapping(upgradeSourceNIPrefs, targetNetworkInterfacePrefs);
+		SC_log(LOG_INFO,
+		       "Upgradng, external interface mapping: %@",
+		       externalMapping);
 
 		newTargetNetworkInterfaceEntity = _SCNetworkMigrationCreateNetworkInterfaceArray(targetNetworkInterfacePrefs, externalMapping, &foundNewInterface);
+
+		SC_log(LOG_INFO,
+		       "Upgrading, %s new interfaces"
+		       "\n  newTargetNetworkInterfaceEntity = %@",
+		       foundNewInterface ? "found" : "no",
+		       newTargetNetworkInterfaceEntity);
+
 		if (foundNewInterface) {
-			if (isA_CFArray(newTargetNetworkInterfaceEntity) == NULL) {
-				SC_log(LOG_INFO, "newTargetNetworkInterfaceEntity is NULL or not of correct type");
-				CFRelease(upgradeSourcePrefs);
-				CFRelease(upgradeSourceNIPrefs);
-				goto done;
-			}
-			// Write new interface mapping to NetworkInterfaces.plist
-			if (!__SCNetworkInterfaceSaveStoredWithPreferences(targetNetworkInterfacePrefs, newTargetNetworkInterfaceEntity)) {
-				SC_log(LOG_INFO, "SCNetworkInterfaceSaveStoreWithPreferences: failed to update NetworkInterfaces.plist");
+			if (newTargetNetworkInterfaceEntity == NULL) {
+				SC_log(LOG_NOTICE, "Upgrading, failed w/no new interface list");
 				CFRelease(upgradeSourcePrefs);
 				CFRelease(upgradeSourceNIPrefs);
 				goto done;
 			}
 
-			// Create BSD Name Mapping to facilitate mapping of services
+			// add new interface mapping to NetworkInterfaces.plist
+			if (!__SCNetworkInterfaceSaveStoredWithPreferences(targetNetworkInterfacePrefs, newTargetNetworkInterfaceEntity)) {
+				SC_log(LOG_NOTICE, "Upgrading, failed to update NetworkInterfaces.plist");
+				CFRelease(upgradeSourcePrefs);
+				CFRelease(upgradeSourceNIPrefs);
+				goto done;
+			}
+
+			// create BSD name mapping to facilitate mapping of services
 			bsdNameMapping = _SCNetworkMigrationCreateBSDNameMapping(NULL, externalMapping);
 
-			serviceMapping = _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(upgradeSourcePrefs, targetPrefs, bsdNameMapping);
+			serviceMapping = _SCNetworkMigrationCreateServiceMappingUsingBSDNameMapping(upgradeSourcePrefs, targetPrefs, bsdNameMapping);
 
-			_SCNetworkMigrationDoServiceMigration(upgradeSourcePrefs, targetPrefs,
-							      serviceMapping, bsdNameMapping,
-							      NULL, NULL);
+			logConfiguration("Source", upgradeSourcePrefs);
+			logConfiguration("Target", targetPrefs);
+			_SCNetworkMigrationDoServiceMigration(upgradeSourcePrefs,
+							      targetPrefs,
+							      serviceMapping,
+							      bsdNameMapping,
+							      NULL,
+							      NULL);
+			logConfiguration("Updated", targetPrefs);
 		}
 		CFRelease(upgradeSourcePrefs);
 		CFRelease(upgradeSourceNIPrefs);
 	} else {
 		builtinMapping = _SCNetworkConfigurationCopyBuiltinMapping(sourceNetworkInterfacePrefs, targetNetworkInterfacePrefs);
+
 		externalMapping = _SCNetworkConfigurationCopyExternalInterfaceMapping(sourceNetworkInterfacePrefs, targetNetworkInterfacePrefs);
 
 		newTargetNetworkInterfaceEntity = _SCNetworkMigrationCreateNetworkInterfaceArray(targetNetworkInterfacePrefs, externalMapping, NULL);
-		if (isA_CFArray(newTargetNetworkInterfaceEntity) == NULL) {
-			SC_log(LOG_INFO, "newTargetNetworkInterfaceEntity is NULL or not of correct type");
+		if (newTargetNetworkInterfaceEntity == NULL) {
+			SC_log(LOG_NOTICE, "Migrating, failed w/no new interface list");
 			goto done;
 		}
+
 		// Write new interface mapping to NetworkInterfaces.plist
 		if (!__SCNetworkInterfaceSaveStoredWithPreferences(targetNetworkInterfacePrefs, newTargetNetworkInterfaceEntity)) {
-			SC_log(LOG_INFO, "SCNetworkInterfaceSaveStoreWithPreferences: failed to update NetworkInterfaces.plist");
+			SC_log(LOG_NOTICE, "Migrating, failed to update NetworkInterfaces.plist");
 			goto done;
 		}
-		// Create BSD Name Mapping to facilitate mapping of services
+
+		// create BSD name mapping to facilitate mapping of services
 		bsdNameMapping = _SCNetworkMigrationCreateBSDNameMapping(builtinMapping, externalMapping);
 
-		if (isA_CFDictionary(bsdNameMapping) == NULL) {
-			SC_log(LOG_INFO, "BSD name mapping is NULL");
-			goto done;
-		}
-		SC_log(LOG_DEBUG, "BSD Name Mapping: %@", bsdNameMapping);
-		serviceMapping = _SCNetworkMigrationCreateServiceMappingUsingBSDMapping(sourcePrefs, targetPrefs, bsdNameMapping);
+		serviceMapping = _SCNetworkMigrationCreateServiceMappingUsingBSDNameMapping(sourcePrefs, targetPrefs, bsdNameMapping);
 		if (serviceMapping == NULL) {
 			goto done;
 		}
 
 		setMapping = _SCNetworkMigrationCreateSetMapping(sourcePrefs, targetPrefs);
+
 		sourceServiceSetMapping = _SCNetworkMigrationCreateServiceSetMapping(sourcePrefs);
 
-		// Perform the migration of services
-		if (!_SCNetworkMigrationDoServiceMigration(sourcePrefs, targetPrefs,
-							  serviceMapping, bsdNameMapping,
-							  setMapping, sourceServiceSetMapping)) {
-			SC_log(LOG_INFO, "SCNetworkMigrationDoServiceMigration: failed to complete successfully");
+		logConfiguration("Source", sourcePrefs);
+		logConfiguration("Target", targetPrefs);
+		if (!_SCNetworkMigrationDoServiceMigration(sourcePrefs,
+							   targetPrefs,
+							   serviceMapping,
+							   bsdNameMapping,
+							   setMapping,
+							   sourceServiceSetMapping)) {
+			SC_log(LOG_NOTICE, "SCNetworkMigrationDoServiceMigration(): service migration failed");
 			goto done;
 		}
-
 #if	!TARGET_OS_IPHONE
-		// Migrating Virtual Network Interface
+		// Migrating Virtual Network Interfaces
 		if (!_SCNetworkMigrationDoVirtualNetworkInterfaceMigration(sourcePrefs, sourceNetworkInterfacePrefs,
 									  targetPrefs, targetNetworkInterfacePrefs,
 									  bsdNameMapping, setMapping, sourceServiceSetMapping)) {
-			SC_log(LOG_INFO, "_SCNetworkMigrationDoVirtualNetworkInterfaceMigration: failed to complete successfully");
+			SC_log(LOG_NOTICE, "SCNetworkMigrationDoServiceMigration(): virtual interface migration failed");
 		}
 #endif	// !TARGET_OS_IPHONE
 		// Migrate Service Order
 		if (!_SCNetworkMigrationDoServiceOrderMigration(sourcePrefs, targetPrefs, setMapping)) {
-			SC_log(LOG_INFO, "_SCNetworkMigrationDoServiceOrderMigration: failed to complete successfully");
+			SC_log(LOG_NOTICE, "SCNetworkMigrationDoServiceMigration(): service order migration failed");
 		}
+		logConfiguration("Migrated", targetPrefs);
 	}
 
 skipServiceMigration:
 	// Migrating System Information
 	if (!isUpgradeScenario) {
 		if (!_SCNetworkMigrationDoSystemMigration(sourcePrefs, targetPrefs)) {
-			SC_log(LOG_INFO, "_SCNetworkMigrationDoSystemMigration: failed to complete successfully");
+			SC_log(LOG_NOTICE, "SCNetworkMigrationDoServiceMigration(): system setting migration failed");
 		}
 	}
 	if (!_SCNetworkConfigurationCheckValidityWithPreferences(targetPrefs, targetNetworkInterfacePrefs, validityOptions)) {
-		SC_log(LOG_INFO, "Migrated configuration not valid");
+		SC_log(LOG_NOTICE, "Migrated configuration not valid");
 		goto done;
 	}
 	if (!SCPreferencesCommitChanges(targetPrefs)) {
-		SC_log(LOG_INFO, "SCPreferencesCommitChanges(target preferences.plist) failed: %s", SCErrorString(SCError()));
+		SC_log(LOG_NOTICE, "SCPreferencesCommitChanges(target preferences.plist) failed: %s", SCErrorString(SCError()));
 		goto done;
 	}
 
 	if (!SCPreferencesCommitChanges(targetNetworkInterfacePrefs)) {
-		SC_log(LOG_INFO, "SCPreferencesCommitChanges(target NetworkInterfaces.plist) failed: %s", SCErrorString(SCError()));
+		SC_log(LOG_NOTICE, "SCPreferencesCommitChanges(target NetworkInterfaces.plist) failed: %s", SCErrorString(SCError()));
 		goto done;
 	}
 	migrationSuccess = TRUE;
@@ -3773,18 +4254,28 @@ _SCNetworkMigrationAreConfigurationsIdentical (CFURLRef configurationURL,
 	    expectedConfigurationURL == NULL) {
 		return FALSE;
 	}
-	baseConfigURL = CFURLCreateWithFileSystemPathRelativeToBase(NULL, PREFS_DEFAULT_DIR_RELATIVE, kCFURLPOSIXPathStyle, TRUE, configurationURL);
-	configPreferencesURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL, (const UInt8*) PREFS_DEFAULT_CONFIG_PLIST, sizeof(PREFS_DEFAULT_CONFIG_PLIST), FALSE, baseConfigURL);
-
+	baseConfigURL = CFURLCreateWithFileSystemPathRelativeToBase(NULL,
+								    PREFS_DEFAULT_DIR_RELATIVE,
+								    kCFURLPOSIXPathStyle,
+								    TRUE,
+								    configurationURL);
+	configPreferencesURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL,
+										     (const UInt8*)PREFS_DEFAULT_CONFIG_PLIST,
+										     sizeof(PREFS_DEFAULT_CONFIG_PLIST),
+										     FALSE,
+										     baseConfigURL);
 	if (!CFURLResourceIsReachable(configPreferencesURL, NULL)) {
-		SC_log(LOG_INFO, "No preferences.plist file");
+		SC_log(LOG_NOTICE, "No preferences.plist file: %@", configPreferencesURL);
 		goto done;
 	}
 
-	configNetworkInterfacesURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL, (const UInt8*)NETWORK_INTERFACES_PREFS_PLIST, sizeof(NETWORK_INTERFACES_PREFS_PLIST), FALSE, baseConfigURL);
-
+	configNetworkInterfacesURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL,
+											   (const UInt8*)INTERFACES_DEFAULT_CONFIG_PLIST,
+											   sizeof(INTERFACES_DEFAULT_CONFIG_PLIST),
+											   FALSE,
+											   baseConfigURL);
 	if (!CFURLResourceIsReachable(configNetworkInterfacesURL, NULL)) {
-		SC_log(LOG_INFO, "No NetworkInterfaces.plist file");
+		SC_log(LOG_NOTICE, "No NetworkInterfaces.plist file: %@", configNetworkInterfacesURL);
 		goto done;
 	}
 
@@ -3797,18 +4288,30 @@ _SCNetworkMigrationAreConfigurationsIdentical (CFURLRef configurationURL,
 		goto done;
 	}
 
-	baseExpectedConfigURL = CFURLCreateWithFileSystemPathRelativeToBase(NULL, PREFS_DEFAULT_DIR_RELATIVE, kCFURLPOSIXPathStyle, TRUE, expectedConfigurationURL);
-	expectedPreferencesURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL, (const UInt8*)PREFS_DEFAULT_CONFIG_PLIST, sizeof(PREFS_DEFAULT_CONFIG_PLIST), FALSE, baseExpectedConfigURL);
+	baseExpectedConfigURL = CFURLCreateWithFileSystemPathRelativeToBase(NULL,
+									    PREFS_DEFAULT_DIR_RELATIVE,
+									    kCFURLPOSIXPathStyle,
+									    TRUE,
+									    expectedConfigurationURL);
+	expectedPreferencesURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL,
+										       (const UInt8*)PREFS_DEFAULT_CONFIG_PLIST,
+										       sizeof(PREFS_DEFAULT_CONFIG_PLIST),
+										       FALSE,
+										       baseExpectedConfigURL);
 
 	if (!CFURLResourceIsReachable(expectedPreferencesURL, NULL)) {
-		SC_log(LOG_INFO, "No expected preferences.plist file");
+		SC_log(LOG_NOTICE, "No expected preferences.plist file");
 		goto done;
 	}
 
-	expectedNetworkInterfaceURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL, (const UInt8*)NETWORK_INTERFACES_PREFS_PLIST, sizeof(NETWORK_INTERFACES_PREFS_PLIST), FALSE, baseExpectedConfigURL);
+	expectedNetworkInterfaceURL = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL,
+											    (const UInt8*)INTERFACES_DEFAULT_CONFIG_PLIST,
+											    sizeof(INTERFACES_DEFAULT_CONFIG_PLIST),
+											    FALSE,
+											    baseExpectedConfigURL);
 
 	if (!CFURLResourceIsReachable(expectedNetworkInterfaceURL, NULL)) {
-		SC_log(LOG_INFO, "No expected NetworkInterfaces.plist file");
+		SC_log(LOG_NOTICE, "No expected NetworkInterfaces.plist file");
 		goto done;
 	}
 
@@ -3835,7 +4338,7 @@ done:
 	    expectedConfigPref == NULL ||
 	    configNetworkInterfacePref == NULL ||
 	    expectedNetworkInterfacePref == NULL) {
-		SC_log(LOG_INFO, "One of the preferences is NULL");
+		SC_log(LOG_NOTICE, "One of the preferences is NULL");
 		isIdentical = FALSE;
 	} else {
 		isIdentical = (_SCNetworkMigrationAreServicesIdentical(configPref, expectedConfigPref) &&
@@ -3902,8 +4405,11 @@ _SCNetworkConfigurationCopyMigrationRemovePaths	(CFArrayRef	targetPaths,
 			SC_log(LOG_NOTICE, "Cannot get file system representation for url: %@", affectedURL);
 			continue;
 		}
-		targetFile = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL, (const UInt8*)filePath,
-		strnlen(filePath, sizeof(filePath)), FALSE, targetDir);
+		targetFile = CFURLCreateFromFileSystemRepresentationRelativeToBase(NULL,
+										   (const UInt8*)filePath,
+										   strnlen(filePath, sizeof(filePath)),
+										   FALSE,
+										   targetDir);
 
 		if (!CFURLResourceIsReachable(targetFile, NULL)) {
 			CFArrayAppendValue(toBeRemoved, affectedURL);

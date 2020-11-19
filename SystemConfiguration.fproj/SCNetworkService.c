@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -34,7 +34,10 @@
 #include "SCNetworkConfigurationInternal.h"
 #include "SCPreferencesInternal.h"
 
+#include <net/if.h>
 #include <pthread.h>
+
+#include <CommonCrypto/CommonDigest.h>
 
 #define EXTERNAL_ID_DOMAIN_PREFIX	"_"
 
@@ -424,7 +427,7 @@ SCNetworkServiceAddProtocolType(SCNetworkServiceRef service, CFStringRef protoco
 
 	newEntity = _protocolTemplate(service, protocolType);
 	assert(newEntity != NULL);
-	
+
 	ok = SCNetworkProtocolSetConfiguration(protocol, newEntity);
 	if (!ok) {
 		// could not set default configuration
@@ -459,6 +462,7 @@ SCNetworkServiceCopyAll(SCPreferencesRef prefs)
 	CFIndex			n;
 	CFStringRef		path;
 	CFDictionaryRef		services;
+
 
 	path = SCPreferencesPathKeyCreateNetworkServices(NULL);
 	services = SCPreferencesPathGetValue(prefs, path);
@@ -547,7 +551,7 @@ __SCNetworkServiceCopyAllInterfaces(SCPreferencesRef prefs)
 		service = CFArrayGetValueAtIndex(services, idx);
 		interface = SCNetworkServiceGetInterface(service);
 
-		if (isA_SCNetworkInterface(interface) == NULL) {
+		if (!isA_SCNetworkInterface(interface)) {
 			continue;
 		}
 		CFArrayAppendValue(interfaces, interface);
@@ -977,6 +981,91 @@ SCNetworkServiceCreate(SCPreferencesRef prefs, SCNetworkInterfaceRef interface)
 }
 
 
+static CF_RETURNS_RETAINED CFStringRef
+copyInterfaceUUID(CFStringRef bsdName)
+{
+	union {
+		unsigned char	sha256_bytes[CC_SHA256_DIGEST_LENGTH];
+		CFUUIDBytes	uuid_bytes;
+	} bytes;
+	CC_SHA256_CTX	ctx;
+	char		if_name[IF_NAMESIZE];
+	CFUUIDRef	uuid;
+	CFStringRef	uuid_str;
+
+	// start with interface name
+	memset(&if_name, 0, sizeof(if_name));
+	(void) _SC_cfstring_to_cstring(bsdName,
+				       if_name,
+				       sizeof(if_name),
+				       kCFStringEncodingASCII);
+
+	// create SHA256 hash
+	memset(&bytes, 0, sizeof(bytes));
+	CC_SHA256_Init(&ctx);
+	CC_SHA256_Update(&ctx,
+			 if_name,
+			 sizeof(if_name));
+	CC_SHA256_Final(bytes.sha256_bytes, &ctx);
+
+	// create UUID string
+	uuid = CFUUIDCreateFromUUIDBytes(NULL, bytes.uuid_bytes);
+	uuid_str = CFUUIDCreateString(NULL, uuid);
+	CFRelease(uuid);
+
+	return uuid_str;
+}
+
+
+SCNetworkServiceRef
+_SCNetworkServiceCreatePreconfigured(SCPreferencesRef prefs, SCNetworkInterfaceRef interface)
+{
+	CFStringRef		bsdName;
+	Boolean			ok;
+	SCNetworkServiceRef	service;
+	CFStringRef		serviceID;
+
+	bsdName = SCNetworkInterfaceGetBSDName(interface);
+
+	// create network service
+	service = SCNetworkServiceCreate(prefs, interface);
+	if (service == NULL) {
+		SC_log(LOG_ERR, "could not create network service for \"%@\": %s",
+		       bsdName,
+		       SCErrorString(SCError()));
+		return NULL;
+	}
+
+	// update network service to use a consistent serviceID
+	serviceID = copyInterfaceUUID(bsdName);
+	if (serviceID != NULL) {
+		ok = _SCNetworkServiceSetServiceID(service, serviceID);
+		CFRelease(serviceID);
+		if (!ok) {
+			SC_log(LOG_ERR, "_SCNetworkServiceSetServiceID() failed: %s",
+			       SCErrorString(SCError()));
+			// ... and keep whatever random UUID was created for the service
+		}
+	} else {
+		SC_log(LOG_ERR, "could not create serviceID for \"%@\"", bsdName);
+		// ... and we'll use whatever random UUID was created for the service
+	}
+
+	// establish [template] configuration
+	ok = SCNetworkServiceEstablishDefaultConfiguration(service);
+	if (!ok) {
+		SC_log(LOG_ERR, "could not establish network service for \"%@\": %s",
+		       bsdName,
+		       SCErrorString(SCError()));
+		SCNetworkServiceRemove(service);
+		CFRelease(service);
+		service = NULL;
+	}
+
+	return service;
+}
+
+
 Boolean
 SCNetworkServiceEstablishDefaultConfiguration(SCNetworkServiceRef service)
 {
@@ -1115,8 +1204,7 @@ SCNetworkServiceGetName(SCNetworkServiceRef service)
 	entity = SCPreferencesPathGetValue(servicePrivate->prefs, path);
 	CFRelease(path);
 
-	useSystemInterfaces = ((__SCPreferencesUsingDefaultPrefs(servicePrivate->prefs)) &&
-			       !__SCPreferencesGetLimitSCNetworkConfiguration(servicePrivate->prefs));
+	useSystemInterfaces = !_SCNetworkConfigurationBypassSystemInterfaces(servicePrivate->prefs);
 
 	if (isA_CFDictionary(entity)) {
 		name = CFDictionaryGetValue(entity, kSCPropUserDefinedName);
@@ -2300,34 +2388,34 @@ __private_extern__
 Boolean
 __SCNetworkServiceMigrateNew(SCPreferencesRef		prefs,
 			     SCNetworkServiceRef	service,
-			     CFDictionaryRef		bsdMapping,
+			     CFDictionaryRef		bsdNameMapping,
 			     CFDictionaryRef		setMapping,
 			     CFDictionaryRef		serviceSetMapping)
 {
-	CFStringRef deviceName = NULL;
-	Boolean enabled;
-	SCNetworkInterfaceRef interface = NULL;
-	CFDictionaryRef interfaceEntity = NULL;
-	CFMutableDictionaryRef interfaceEntityMutable = NULL;
-	SCNetworkSetRef newSet = NULL;
-	SCPreferencesRef ni_prefs = NULL;
-	SCNetworkInterfaceRef ni_interface = NULL;
-	SCNetworkInterfaceRef oldInterface = NULL;
-	SCNetworkSetRef oldSet = NULL;
-	SCNetworkServiceRef newService = NULL;
-	CFStringRef serviceID = NULL;
-	SCNetworkServicePrivateRef servicePrivate = (SCNetworkServicePrivateRef) service;
-	CFArrayRef setList = NULL;
-	Boolean success = FALSE;
-	CFStringRef targetDeviceName = NULL;
-	CFStringRef userDefinedName = NULL;
-	CFStringRef userDefinedNameInterface = NULL;
-	CFArrayRef protocols = NULL;
-	CFStringRef subType;
+	CFStringRef			deviceName			= NULL;
+	Boolean				enabled;
+	SCNetworkInterfaceRef		interface			= NULL;
+	CFDictionaryRef			interfaceEntity			= NULL;
+	CFMutableDictionaryRef		interfaceEntityMutable		= NULL;
+	SCNetworkSetRef			newSet				= NULL;
+	SCPreferencesRef		ni_prefs			= NULL;
+	SCNetworkInterfaceRef		ni_interface			= NULL;
+	SCNetworkInterfaceRef		newInterface			= NULL;
+	SCNetworkServiceRef		newService			= NULL;
+	SCNetworkSetRef			oldSet				= NULL;
+	CFStringRef			serviceID			= NULL;
+	SCNetworkServicePrivateRef	servicePrivate			= (SCNetworkServicePrivateRef)service;
+	CFArrayRef			setList				= NULL;
+	Boolean				success				= FALSE;
+	CFStringRef			targetDeviceName		= NULL;
+	CFStringRef			userDefinedName			= NULL;
+	CFStringRef			userDefinedNameInterface	= NULL;
+	CFArrayRef			protocols			= NULL;
+	CFStringRef			subType;
 
-	if ((isA_SCNetworkService(service) == NULL) ||
-	(isA_SCNetworkInterface(servicePrivate->interface) == NULL) ||
-	(servicePrivate->prefs == NULL)) {
+	if (!isA_SCNetworkService(service) ||
+	    !isA_SCNetworkInterface(servicePrivate->interface) ||
+	    (servicePrivate->prefs == NULL)) {
 		goto done;
 	}
 	serviceID = servicePrivate->serviceID;
@@ -2339,22 +2427,28 @@ __SCNetworkServiceMigrateNew(SCPreferencesRef		prefs,
 		goto done;
 	}
 
-	oldInterface = SCNetworkServiceGetInterface(service);
-	interfaceEntity = __SCNetworkInterfaceCopyInterfaceEntity(oldInterface);
+	interface = SCNetworkServiceGetInterface(service);
+	if (interface == NULL) {
+		SC_log(LOG_INFO, "No interface");
+		goto done;
+	}
+
+	interfaceEntity = __SCNetworkInterfaceCopyInterfaceEntity(interface);
 	if (interfaceEntity == NULL) {
 		SC_log(LOG_INFO, "No interface entity");
 		goto done;
 	}
 	interfaceEntityMutable = CFDictionaryCreateMutableCopy(NULL, 0, interfaceEntity);
+	CFRelease(interfaceEntity);
 
-	if (isA_CFDictionary(bsdMapping) != NULL) {
+	if (isA_CFDictionary(bsdNameMapping) != NULL) {
 		deviceName = CFDictionaryGetValue(interfaceEntityMutable, kSCPropNetInterfaceDeviceName);
 		if (isA_CFString(deviceName) != NULL) {
-			targetDeviceName = CFDictionaryGetValue(bsdMapping, deviceName);
+			targetDeviceName = CFDictionaryGetValue(bsdNameMapping, deviceName);
 			if (targetDeviceName != NULL) {
 				// update mapping
 				CFDictionarySetValue(interfaceEntityMutable, kSCPropNetInterfaceDeviceName, targetDeviceName);
-				ni_prefs = __SCPreferencesCreateNIPrefsFromPrefs(prefs);
+				ni_prefs = SCPreferencesCreateCompanion(prefs, INTERFACES_DEFAULT_CONFIG);
 				ni_interface = __SCNetworkInterfaceCreateWithNIPreferencesUsingBSDName(NULL, ni_prefs, targetDeviceName);
 				if (ni_interface != NULL) {
 					userDefinedNameInterface = __SCNetworkInterfaceGetUserDefinedName(ni_interface);
@@ -2365,20 +2459,24 @@ __SCNetworkServiceMigrateNew(SCPreferencesRef		prefs,
 			userDefinedNameInterface = CFDictionaryGetValue(interfaceEntityMutable, kSCPropUserDefinedName);
 		}
 	}
-	subType = CFDictionaryGetValue(interfaceEntityMutable, kSCPropNetInterfaceSubType);
-	interface = _SCNetworkInterfaceCreateWithEntity(NULL, interfaceEntityMutable, NULL);
+	newInterface = _SCNetworkInterfaceCreateWithEntity(NULL,
+							   interfaceEntityMutable,
+							   __kSCNetworkInterfaceSearchExternal);
 	if (userDefinedNameInterface != NULL) {
-		__SCNetworkInterfaceSetUserDefinedName(interface, userDefinedNameInterface);
+		__SCNetworkInterfaceSetUserDefinedName(newInterface, userDefinedNameInterface);
 	}
+
 	// Supporting PPPoE subtype
+	subType = CFDictionaryGetValue(interfaceEntityMutable, kSCPropNetInterfaceSubType);
 	if (subType != NULL &&
 	    CFEqual(subType, kSCValNetInterfaceSubTypePPPoE)) {
-		SCNetworkInterfaceRef childInterface = SCNetworkInterfaceGetInterface(interface);
+		SCNetworkInterfaceRef childInterface = SCNetworkInterfaceGetInterface(newInterface);
 		if (childInterface != NULL) {
 			__SCNetworkInterfaceSetUserDefinedName(childInterface, userDefinedNameInterface);
 		}
 	}
-	newService = SCNetworkServiceCreate(prefs, interface);
+
+	newService = SCNetworkServiceCreate(prefs, newInterface);
 	if (newService == NULL) {
 		SC_log(LOG_INFO, "SCNetworkServiceCreate() failed");
 		goto done;
@@ -2441,12 +2539,11 @@ __SCNetworkServiceMigrateNew(SCPreferencesRef		prefs,
 	copyInterfaceConfiguration(service, newService);
 
 	success = TRUE;
-done:
-	if (interface != NULL) {
-		CFRelease(interface);
-	}
-	if (interfaceEntity != NULL) {
-		CFRelease(interfaceEntity);
+
+    done:
+
+	if (newInterface != NULL) {
+		CFRelease(newInterface);
 	}
 	if (interfaceEntityMutable != NULL) {
 		CFRelease(interfaceEntityMutable);

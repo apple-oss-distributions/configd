@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2001, 2005, 2006, 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -21,23 +21,18 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-/*
- * Modification History
- *
- * May 26, 2000		Allan Nathanson <ajn@apple.com>
- * - initial revision
- */
+#import <Foundation/Foundation.h>
+#import <EventFactory/EventFactory.h>
 
-#ifndef _S_PLUGIN_SUPPORT_H
-#define _S_PLUGIN_SUPPORT_H
+#import "SCDynamicStoreParser.h"
 
-#include <sys/cdefs.h>
+@implementation SCDynamicStoreParser
 
-__BEGIN_DECLS
+- (instancetype)init
+{
+	NSArray<EFLogEventMatch *> *matches = @[];
+	EFLogEventParser *parser = [[EFLogEventParser alloc] initWithMatches:matches];
+	return [super initWithCategory:@"SCDynamicStore" eventParser:parser];
+}
 
-void	plugin_exec	(void		*arg);
-Boolean	plugin_term	(int		*status);
-
-__END_DECLS
-
-#endif	/* !_S_PLUGIN_SUPPORT_H */
+@end

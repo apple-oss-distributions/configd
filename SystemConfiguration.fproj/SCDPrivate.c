@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -917,6 +917,46 @@ _SC_unschedule(CFTypeRef obj, CFRunLoopRef runLoop, CFStringRef runLoopMode, CFM
 #pragma mark Bundle
 
 
+CFStringRef
+_SC_getApplicationBundleID(void)
+{
+	static CFStringRef	bundleID	= NULL;
+	static dispatch_once_t	once;
+
+	dispatch_once(&once, ^{
+		CFBundleRef	bundle;
+
+		bundle = CFBundleGetMainBundle();
+		if (bundle != NULL) {
+			bundleID = CFBundleGetIdentifier(bundle);
+			if (bundleID != NULL) {
+				CFRetain(bundleID);
+			} else {
+				CFURLRef	url;
+
+				url = CFBundleCopyExecutableURL(bundle);
+				if (url != NULL) {
+					bundleID = CFURLCopyPath(url);
+					CFRelease(url);
+				}
+			}
+
+			if (bundleID != NULL) {
+				if (CFEqual(bundleID, CFSTR("/"))) {
+					CFRelease(bundleID);
+					bundleID = NULL;
+				}
+			}
+		}
+		if (bundleID == NULL) {
+			bundleID = CFStringCreateWithFormat(NULL, NULL, CFSTR("Unknown(%d)"), getpid());
+		}
+	});
+
+	return bundleID;
+}
+
+
 #define SYSTEMCONFIGURATION_BUNDLE_ID		CFSTR("com.apple.SystemConfiguration")
 #define	SYSTEMCONFIGURATION_FRAMEWORK_PATH_LEN	(sizeof(SYSTEMCONFIGURATION_FRAMEWORK_PATH) - 1)
 
@@ -1558,10 +1598,12 @@ void
 _SC_crash(const char *crash_info, CFStringRef notifyHeader, CFStringRef notifyMessage)
 {
 	if (_SC_isAppleInternal()) {
-		if (crash_info != NULL) {
-			CRSetCrashLogMessage(crash_info);
-			SC_log(LOG_NOTICE, "%s", crash_info);
+		if (crash_info == NULL) {
+			crash_info = "_SC_crash() called w/o \"crash_info\"";
 		}
+
+		// augment the crash log message
+		CRSetCrashLogMessage(crash_info);
 
 		// simulate a crash report
 		os_log_with_type(SC_LOG_HANDLE(), OS_LOG_TYPE_FAULT, "%s", crash_info);
@@ -1571,9 +1613,8 @@ _SC_crash(const char *crash_info, CFStringRef notifyHeader, CFStringRef notifyMe
 			_SC_ReportCrash(notifyHeader, notifyMessage);
 		}
 
-		if (crash_info != NULL) {
-			CRSetCrashLogMessage(NULL);
-		}
+		// ... and cleanup after the crash report has been generated
+		CRSetCrashLogMessage(NULL);
 	}
 
 	return;

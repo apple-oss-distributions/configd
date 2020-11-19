@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2018, 2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -56,8 +56,6 @@
 #else	// MAIN
 #include "ip_plugin.h"
 #endif	// MAIN
-
-#define	HW_MODEL_LEN			64			// Note: must be >= NETBIOS_NAME_LEN (below)
 
 #define	NETBIOS_NAME_LEN		16
 
@@ -123,7 +121,7 @@ copy_default_name(void)
 	n = CFStringGetLength(str);
 	if (n > (NETBIOS_NAME_LEN - 1)) {
 		CFStringReplace(str,
-				CFRangeMake(NETBIOS_NAME_LEN, n - (NETBIOS_NAME_LEN - 1)),
+				CFRangeMake(NETBIOS_NAME_LEN - 1, n - (NETBIOS_NAME_LEN - 1)),
 				CFSTR(""));
 		n = NETBIOS_NAME_LEN - 1;
 	}
@@ -888,7 +886,7 @@ main(int argc, char **argv)
 	CFStringRef		serviceID;
 	SCDynamicStoreRef	store;
 
-	_sc_log = FALSE;
+	_sc_log = kSCLogDestinationFile;
 	if ((argc > 1) && (strcmp(argv[1], "-d") == 0)) {
 		_sc_verbose = TRUE;
 		argv++;
@@ -952,7 +950,7 @@ main(int argc, char **argv)
 
 #else	/* DEBUG */
 
-	_sc_log     = FALSE;
+	_sc_log     = kSCLogDestinationFile;
 	_sc_verbose = (argc > 1) ? TRUE : FALSE;
 
 	load_smb_configuration((argc > 1) ? TRUE : FALSE);

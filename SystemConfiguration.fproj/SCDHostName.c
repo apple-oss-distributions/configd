@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008, 2011, 2013-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008, 2011, 2013-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -35,7 +35,43 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreFoundation/CFStringDefaultEncoding.h>	// for __CFStringGetUserDefaultEncoding
 #include "SCPreferencesInternal.h"
+#include "SCNetworkConfigurationInternal.h"
 #include "dy_framework.h"
+
+
+#ifndef	__OPEN_SOURCE
+#pragma mark Support
+
+
+static Boolean
+keepPrivate(void)
+{
+	static Boolean		keepPrivate	= FALSE;
+	static dispatch_once_t	once;
+
+	dispatch_once(&once, ^{
+		SecTaskRef	current_task;
+
+		current_task = SecTaskCreateFromSelf(NULL);
+		if (current_task != NULL) {
+			CFBooleanRef	entitlement;
+
+			entitlement = SecTaskCopyValueForEntitlement(current_task,
+								     CFSTR("com.apple.security.on-demand-install-capable"),
+								     NULL);
+			if (entitlement != NULL) {
+				if (isA_CFBoolean(entitlement)) {
+					keepPrivate = CFBooleanGetValue(entitlement);
+				}
+				CFRelease(entitlement);
+			}
+			CFRelease(current_task);
+		}
+	});
+
+	return keepPrivate;
+}
+#endif	// __OPEN_SOURCE
 
 
 #pragma mark ComputerName
@@ -121,6 +157,12 @@ SCDynamicStoreCopyComputerName(SCDynamicStoreRef	store,
 	CFDictionaryRef		dict		= NULL;
 	CFStringRef		key;
 	CFStringRef		name		= NULL;
+
+#ifndef	__OPEN_SOURCE
+	if (keepPrivate()) {
+		return NULL;
+	}
+#endif	// __OPEN_SOURCE
 
 	key  = SCDynamicStoreKeyCreateComputerName(NULL);
 	dict = SCDynamicStoreCopyValue(store, key);
@@ -227,13 +269,8 @@ SCPreferencesSetComputerName(SCPreferencesRef	prefs,
 		CFDictionaryRemoveValue(newDict, kSCPropSystemComputerNameRegion);
 	}
 
-	if (CFDictionaryGetCount(newDict) > 0) {
-		ok = SCPreferencesPathSetValue(prefs, path, newDict);
-	} else {
-		ok = SCPreferencesPathRemoveValue(prefs, path);
-	}
-
-	if (ok) {
+	ok = __SCNetworkConfigurationSetValue(prefs, path, newDict, FALSE);
+	if (ok && __SCPreferencesUsingDefaultPrefs(prefs)) {
 		if (name != NULL) {
 			SC_log(LOG_NOTICE, "attempting to set the computer name to \"%@\"", name);
 		} else {
@@ -258,6 +295,12 @@ SCPreferencesGetHostName(SCPreferencesRef	prefs)
 	CFDictionaryRef	dict;
 	CFStringRef	name;
 	CFStringRef	path;
+
+#ifndef	__OPEN_SOURCE
+	if (keepPrivate()) {
+		return NULL;
+	}
+#endif	// __OPEN_SOURCE
 
 	path = CFStringCreateWithFormat(NULL,
 					NULL,
@@ -327,13 +370,8 @@ SCPreferencesSetHostName(SCPreferencesRef	prefs,
 		CFDictionaryRemoveValue(newDict, kSCPropSystemHostName);
 	}
 
-	if (CFDictionaryGetCount(newDict) > 0) {
-		ok = SCPreferencesPathSetValue(prefs, path, newDict);
-	} else {
-		ok = SCPreferencesPathRemoveValue(prefs, path);
-	}
-
-	if (ok) {
+	ok = __SCNetworkConfigurationSetValue(prefs, path, newDict, FALSE);
+	if (ok && __SCPreferencesUsingDefaultPrefs(prefs)) {
 		if (name != NULL) {
 			SC_log(LOG_NOTICE, "attempting to set the host name to \"%@\"", name);
 		} else {
@@ -410,6 +448,12 @@ SCDynamicStoreCopyLocalHostName(SCDynamicStoreRef store)
 	CFDictionaryRef		dict		= NULL;
 	CFStringRef		key;
 	CFStringRef		name		= NULL;
+
+#ifndef	__OPEN_SOURCE
+	if (keepPrivate()) {
+		return NULL;
+	}
+#endif	// __OPEN_SOURCE
 
 	key  = SCDynamicStoreKeyCreateHostNames(NULL);
 	dict = SCDynamicStoreCopyValue(store, key);
@@ -571,13 +615,8 @@ SCPreferencesSetLocalHostName(SCPreferencesRef	prefs,
 		CFDictionaryRemoveValue(newDict, kSCPropNetLocalHostName);
 	}
 
-	if (CFDictionaryGetCount(newDict) > 0) {
-		ok = SCPreferencesPathSetValue(prefs, path, newDict);
-	} else {
-		ok = SCPreferencesPathRemoveValue(prefs, path);
-	}
-
-	if (ok) {
+	ok = __SCNetworkConfigurationSetValue(prefs, path, newDict, FALSE);
+	if (ok && __SCPreferencesUsingDefaultPrefs(prefs)) {
 		if (name != NULL) {
 			SC_log(LOG_NOTICE, "attempting to set the local host name to \"%@\"", name);
 		} else {

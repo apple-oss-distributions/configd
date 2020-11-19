@@ -1,5 +1,5 @@
 /*
- * Copyright(c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright(c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -65,13 +65,6 @@ __log_SCPreferences(void)
 }
 
 
-static __inline__ CFTypeRef
-isA_SCPreferences(CFTypeRef obj)
-{
-	return (isA_CFType(obj, SCPreferencesGetTypeID()));
-}
-
-
 static CFStringRef
 __SCPreferencesCopyDescription(CFTypeRef cf) {
 	CFAllocatorRef		allocator	= CFGetAllocator(cf);
@@ -118,6 +111,19 @@ __SCPreferencesDeallocate(CFTypeRef cf)
 	/* release resources */
 
 	pthread_mutex_destroy(&prefsPrivate->lock);
+
+	if (prefsPrivate->parent != NULL) {
+		SCPreferencesPrivateRef	parentPrivate	= (SCPreferencesPrivateRef)prefsPrivate->parent;
+
+		// remove [weak] reference from parent to this companion
+		pthread_mutex_lock(&parentPrivate->lock);
+		CFDictionaryRemoveValue(parentPrivate->companions, prefsPrivate->prefsID);
+		pthread_mutex_unlock(&parentPrivate->lock);
+
+		// remove [strong] reference from companion to parent
+		CFRelease(prefsPrivate->parent);
+	}
+	if (prefsPrivate->companions != NULL)	CFRelease(prefsPrivate->companions);
 
 	if (prefsPrivate->name)			CFRelease(prefsPrivate->name);
 	if (prefsPrivate->prefsID)		CFRelease(prefsPrivate->prefsID);
@@ -594,7 +600,7 @@ __SCPreferencesAccess(SCPreferencesRef	prefs)
 								0,
 								&kCFTypeDictionaryKeyCallBacks,
 								&kCFTypeDictionaryValueCallBacks);
-		prefsPrivate->changed = TRUE;
+		prefsPrivate->changed = FALSE;
 	}
 
 	SC_log(LOG_DEBUG, "SCPreferences() access: %s, size=%lld",
@@ -662,8 +668,7 @@ SCPreferencesCreateWithOptions(CFAllocatorRef	allocator,
 
 	if (authorization != NULL) {
 		CFMutableDictionaryRef	authorizationDict;
-		CFBundleRef		bundle;
-		CFStringRef		bundleID	= NULL;
+		CFStringRef		bundleID;
 
 		authorizationDict =  CFDictionaryCreateMutable(NULL,
 							       0,
@@ -691,36 +696,10 @@ SCPreferencesCreateWithOptions(CFAllocatorRef	allocator,
 		}
 #endif	// !TARGET_OS_IPHONE
 
-		/* get the application/executable/bundle name */
-		bundle = CFBundleGetMainBundle();
-		if (bundle != NULL) {
-			bundleID = CFBundleGetIdentifier(bundle);
-			if (bundleID != NULL) {
-				CFRetain(bundleID);
-			} else {
-				CFURLRef	url;
-
-				url = CFBundleCopyExecutableURL(bundle);
-				if (url != NULL) {
-					bundleID = CFURLCopyPath(url);
-					CFRelease(url);
-				}
-			}
-
-			if (bundleID != NULL) {
-				if (CFEqual(bundleID, CFSTR("/"))) {
-					CFRelease(bundleID);
-					bundleID = NULL;
-				}
-			}
-		}
-		if (bundleID == NULL) {
-			bundleID = CFStringCreateWithFormat(NULL, NULL, CFSTR("Unknown(%d)"), getpid());
-		}
+		bundleID = _SC_getApplicationBundleID();
 		CFDictionaryAddValue(authorizationDict,
 				     kSCHelperAuthCallerInfo,
 				     bundleID);
-		CFRelease(bundleID);
 
 		if (authorizationDict != NULL) {
 			(void) _SCSerialize((CFPropertyListRef)authorizationDict,
@@ -733,31 +712,145 @@ SCPreferencesCreateWithOptions(CFAllocatorRef	allocator,
 
 	prefsPrivate = __SCPreferencesCreate(allocator, name, prefsID, authorizationData, options);
 	if (prefsPrivate != NULL) {
-		const char	*astr	= "";
-		const char	*ostr	= "";
+		const char	*opt_none	= "";
+		const char	*opt_1		= opt_none;
+		const char	*opt_2		= opt_none;
 
 		if (options != NULL) {
-			ostr = "options";
+			opt_2 = "options";
 		}
 
 		if (authorization != NULL) {
 			if (authorization == kSCPreferencesUseEntitlementAuthorization) {
-				astr = "entitlement";
+				opt_1 = "entitlement";
 			} else {
-				astr = "authorization";
+				opt_1 = "authorization";
 			}
 		}
 
 		SC_log(LOG_DEBUG, "create w/%s%s%s %@",
-		       ostr,
-		       ((ostr != "") && (astr != "")) ? " + " : "",
-		       astr,
+		       opt_2,
+		       ((opt_2 != opt_none) && (opt_1 != opt_none)) ? " + " : "",
+		       opt_1,
 		       prefsPrivate);
 	}
 
 	if (authorizationData != NULL) CFRelease(authorizationData);
 
 	return (SCPreferencesRef)prefsPrivate;
+}
+
+
+SCPreferencesRef
+SCPreferencesCreateCompanion(SCPreferencesRef prefs, CFStringRef companionPrefsID)
+{
+	CFAllocatorRef		allocator	= CFGetAllocator(prefs);
+	SCPreferencesPrivateRef	companionPrefs	= NULL;
+	CFMutableStringRef	newPrefsID;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
+
+	if (companionPrefsID == NULL) {
+		companionPrefsID = PREFS_DEFAULT_CONFIG;
+	} else {
+		if (CFStringFindWithOptions(companionPrefsID,
+					    CFSTR("/"),
+					    CFRangeMake(0, CFStringGetLength(companionPrefsID)),
+					    kCFCompareBackwards,
+					    NULL)) {
+			// if companion prefsID contains a "/"
+			_SCErrorSet(kSCStatusInvalidArgument);
+			return NULL;
+		}
+	}
+
+	if (prefsPrivate->prefsID == NULL) {
+		if (CFEqual(companionPrefsID, PREFS_DEFAULT_CONFIG)) {
+			// if prefsID and companionPrefsID match
+			_SCErrorSet(kSCStatusInvalidArgument);
+			return NULL;
+		}
+		newPrefsID = CFStringCreateMutableCopy(allocator, 0, companionPrefsID);
+	} else {
+		CFIndex	prefsIDLen	= CFStringGetLength(prefsPrivate->prefsID);
+		CFRange	range;
+
+		if (CFStringFindWithOptions(prefsPrivate->prefsID,
+					    CFSTR("/"),
+					    CFRangeMake(0, prefsIDLen),
+					    kCFCompareBackwards,
+					    &range)) {
+			Boolean		match;
+			CFStringRef	suffix;
+
+			// if slash, check suffix
+			range.location++;
+			if (range.location >= prefsIDLen) {
+				// if no suffix
+				_SCErrorSet(kSCStatusInvalidArgument);
+				return NULL;
+			}
+			range.length = prefsIDLen - range.location;
+			suffix = CFStringCreateWithSubstring(allocator, prefsPrivate->prefsID, range);
+			match = CFEqual(suffix, companionPrefsID);
+			CFRelease(suffix);
+			if (match) {
+				// if prefsID [suffix] and companionPrefsID match
+				_SCErrorSet(kSCStatusInvalidArgument);
+				return NULL;
+			}
+
+			// replace the suffix
+			newPrefsID = CFStringCreateMutableCopy(NULL, 0, prefsPrivate->prefsID);
+			CFStringReplace(newPrefsID, range, companionPrefsID);
+		} else if (!CFEqual(prefsPrivate->prefsID, companionPrefsID)) {
+			// if no slash, prefsID and companionPrefsID differ
+			newPrefsID = CFStringCreateMutableCopy(NULL, 0, companionPrefsID);
+		} else {
+			// if no slash, prefsID and companionPrefsID match
+			_SCErrorSet(kSCStatusInvalidArgument);
+			return NULL;
+		}
+	}
+	assert(newPrefsID != NULL);
+
+	pthread_mutex_lock(&prefsPrivate->lock);
+	if ((prefsPrivate->companions != NULL) &&
+	    CFDictionaryGetValueIfPresent(prefsPrivate->companions,
+					  newPrefsID,
+					  (const void **)&companionPrefs) &&
+	    (companionPrefs != NULL)) {
+		// if we already have a companion
+		SC_log(LOG_DEBUG, "create [companion] reference %@", companionPrefs);
+		CFRetain(companionPrefs);
+	} else {
+		companionPrefs = __SCPreferencesCreate(allocator,
+						       prefsPrivate->name,
+						       newPrefsID,
+						       prefsPrivate->authorizationData,
+						       prefsPrivate->options);
+		if (companionPrefs != NULL) {
+			SCPreferencesPrivateRef	companionPrefsPrivate	= (SCPreferencesPrivateRef)companionPrefs;
+
+			SC_log(LOG_DEBUG, "create [companion] %@", companionPrefs);
+
+			// add [strong] reference from companion to parent
+			companionPrefsPrivate->parent = CFRetain(prefs);
+
+			// add [weak] reference from parent to this companion
+			if (prefsPrivate->companions == NULL) {
+				prefsPrivate->companions = CFDictionaryCreateMutable(NULL,
+										     0,
+										     &kCFTypeDictionaryKeyCallBacks,
+										     NULL);
+			}
+			CFDictionarySetValue(prefsPrivate->companions, newPrefsID, companionPrefs);
+		}
+	}
+	pthread_mutex_unlock(&prefsPrivate->lock);
+
+	CFRelease(newPrefsID);
+
+	return (SCPreferencesRef)companionPrefs;
 }
 
 
@@ -880,7 +973,8 @@ __SCPreferencesAddSession(SCPreferencesRef prefs)
 							     prefsNotify,
 							     &context);
 		if (prefsPrivate->session == NULL) {
-			SC_log(LOG_INFO, "SCDynamicStoreCreate() failed");
+			SC_log(LOG_ERR, "could not add SCDynamicStore session (for prefs): %s",
+			       SCErrorString(SCError()));
 			return FALSE;
 		}
 
@@ -1084,11 +1178,22 @@ __SCPreferencesScheduleWithRunLoop(SCPreferencesRef	prefs,
 		keys = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
 		CFArrayAppendValue(keys, prefsPrivate->sessionKeyCommit);
 		CFArrayAppendValue(keys, prefsPrivate->sessionKeyApply);
-		(void) SCDynamicStoreSetNotificationKeys(prefsPrivate->session, keys, NULL);
+		ok = SCDynamicStoreSetNotificationKeys(prefsPrivate->session, keys, NULL);
 		CFRelease(keys);
+		if (!ok) {
+			SC_log(LOG_ERR, "could not set SCDynamicStore notification keys (for prefs): %s",
+			       SCErrorString(SCError()));
+			goto done;
+		}
 
 		if (runLoop != NULL) {
 			prefsPrivate->rls = SCDynamicStoreCreateRunLoopSource(NULL, prefsPrivate->session, 0);
+			if (prefsPrivate->rls == NULL) {
+				SC_log(LOG_ERR, "could not create SCDynamicStore runloop source (for prefs): %s",
+				       SCErrorString(SCError()));
+				ok = FALSE;
+				goto done;
+			}
 			prefsPrivate->rlList = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
 		}
 
