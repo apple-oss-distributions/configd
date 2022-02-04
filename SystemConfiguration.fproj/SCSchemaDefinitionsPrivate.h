@@ -32,6 +32,7 @@
  *   kSCPropNetIgnoreLinkStatus                         "IgnoreLinkStatus"             CFBoolean
  *   kSCPropConfirmedInterfaceName                      "ConfirmedInterfaceName"       CFString
  *   kSCPropDisableUntilNeeded                          "DisableUntilNeeded"           CFNumber (0 or 1)
+ *   kSCPropDisablePrivateRelay                         "DisablePrivateRelay"          CFNumber (0 or 1)
  *
  * Preference Keys
  *
@@ -189,6 +190,13 @@
  *   kSCPropNetNAT64PLATDiscoveryCompletionTime         "PLATDiscoveryCompletionTime"  CFDate
  *
  * kSCEntNetProxies Entity Keys
+ *
+ *   kSCPropNetProxiesTransportConverterEnable          "TransportConverterEnable"     CFNumber (0 or 1)
+ *   kSCPropNetProxiesTransportConverterPort            "TransportConverterPort"       CFNumber
+ *   kSCPropNetProxiesTransportConverterProxy           "TransportConverterProxy"      CFArray[CFString]
+ *   kSCPropNetProxiesTransportConverterFallBackAllowed "TransportConverterFallBackAllowed" CFNumber (0 or 1)
+ *   kSCPropNetProxiesTransportConverterMultipathServiceType "TransportConverterMultipathServiceType" CFNumber
+ *   kSCPropNetProxiesTransportConverterTFOMode         "TransportConverterTFOMode"    CFNumber
  *
  *   kSCPropNetProxiesBypassAllowed                     "BypassAllowed"                CFNumber (0 or 1)
  *   kSCPropNetProxiesFallBackAllowed                   "FallBackAllowed"              CFNumber (0 or 1)
@@ -357,6 +365,13 @@ extern const CFStringRef kSCPropDisableUntilNeeded                          API_
 #define kSCPropDisableUntilNeeded kSCPropDisableUntilNeeded
 
 /*!
+  @const kSCPropDisablePrivateRelay
+  @discussion Value is a CFNumber (0 or 1)
+ */
+extern const CFStringRef kSCPropDisablePrivateRelay                         API_AVAILABLE(macos(12.0)) SPI_AVAILABLE(ios(15.0), tvos(15.0), watchos(8.0), bridgeos(6.0));
+#define kSCPropDisablePrivateRelay kSCPropDisablePrivateRelay
+
+/*!
   @group Preference Keys
  */
 
@@ -389,7 +404,7 @@ extern const CFStringRef kSCEntNetAppLayer                                  API_
   @const kSCEntNetCaptivePortal
   @discussion Value is a CFDictionary
  */
-extern const CFStringRef kSCEntNetCaptivePortal                             SPI_AVAILABLE(macos(10.16), ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
+extern const CFStringRef kSCEntNetCaptivePortal                             SPI_AVAILABLE(macos(11.0), ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
 #define kSCEntNetCaptivePortal kSCEntNetCaptivePortal
 
 /*!
@@ -581,7 +596,7 @@ extern const CFStringRef kSCPropNetDNSSupplementalMatchDomainsNoSearch      API_
   @const kSCPropNetCaptivePortalURL
   @discussion Value is a CFString
  */
-extern const CFStringRef kSCPropNetCaptivePortalURL                         SPI_AVAILABLE(macos(10.16), ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
+extern const CFStringRef kSCPropNetCaptivePortalURL                         SPI_AVAILABLE(macos(11.0), ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
 #define kSCPropNetCaptivePortalURL kSCPropNetCaptivePortalURL
 
 /*!
@@ -1072,6 +1087,48 @@ extern const CFStringRef kSCPropNetNAT64PLATDiscoveryCompletionTime         API_
 /*!
   @group kSCEntNetProxies Entity Keys
  */
+
+/*!
+  @const kSCPropNetProxiesTransportConverterEnable
+  @discussion Value is a CFNumber (0 or 1)
+ */
+extern const CFStringRef kSCPropNetProxiesTransportConverterEnable          API_AVAILABLE(macos(11.0)) SPI_AVAILABLE(ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
+#define kSCPropNetProxiesTransportConverterEnable kSCPropNetProxiesTransportConverterEnable
+
+/*!
+  @const kSCPropNetProxiesTransportConverterPort
+  @discussion Value is a CFNumber
+ */
+extern const CFStringRef kSCPropNetProxiesTransportConverterPort            API_AVAILABLE(macos(11.0)) SPI_AVAILABLE(ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
+#define kSCPropNetProxiesTransportConverterPort kSCPropNetProxiesTransportConverterPort
+
+/*!
+  @const kSCPropNetProxiesTransportConverterProxy
+  @discussion Value is a CFArray[CFString]
+ */
+extern const CFStringRef kSCPropNetProxiesTransportConverterProxy           API_AVAILABLE(macos(11.0)) SPI_AVAILABLE(ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
+#define kSCPropNetProxiesTransportConverterProxy kSCPropNetProxiesTransportConverterProxy
+
+/*!
+  @const kSCPropNetProxiesTransportConverterFallBackAllowed
+  @discussion Value is a CFNumber (0 or 1)
+ */
+extern const CFStringRef kSCPropNetProxiesTransportConverterFallBackAllowed  API_AVAILABLE(macos(11.0)) SPI_AVAILABLE(ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
+#define kSCPropNetProxiesTransportConverterFallBackAllowed kSCPropNetProxiesTransportConverterFallBackAllowed
+
+/*!
+  @const kSCPropNetProxiesTransportConverterMultipathServiceType
+  @discussion Value is a CFNumber
+ */
+extern const CFStringRef kSCPropNetProxiesTransportConverterMultipathServiceType  API_AVAILABLE(macos(11.0)) SPI_AVAILABLE(ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
+#define kSCPropNetProxiesTransportConverterMultipathServiceType kSCPropNetProxiesTransportConverterMultipathServiceType
+
+/*!
+  @const kSCPropNetProxiesTransportConverterTFOMode
+  @discussion Value is a CFNumber
+ */
+extern const CFStringRef kSCPropNetProxiesTransportConverterTFOMode         API_AVAILABLE(macos(11.0)) SPI_AVAILABLE(ios(14.0), tvos(14.0), watchos(7.0), bridgeos(5.0));
+#define kSCPropNetProxiesTransportConverterTFOMode kSCPropNetProxiesTransportConverterTFOMode
 
 /*!
   @const kSCPropNetProxiesBypassAllowed
