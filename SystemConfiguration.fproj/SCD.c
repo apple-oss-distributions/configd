@@ -58,7 +58,6 @@ _SCLogDestination	_sc_log		= kSCLogDestinationDefault;
 #pragma mark Thread specific data
 
 
-static pthread_once_t	tsKeyInitialized	= PTHREAD_ONCE_INIT;
 static pthread_key_t	tsDataKey;
 
 
@@ -83,7 +82,12 @@ __SCThreadSpecificDataFinalize(void *arg)
 static void
 __SCThreadSpecificKeyInitialize()
 {
-	pthread_key_create(&tsDataKey, __SCThreadSpecificDataFinalize);
+	static dispatch_once_t  tsKeyInitialized;
+
+	dispatch_once(&tsKeyInitialized, ^{
+		pthread_key_create(&tsDataKey, __SCThreadSpecificDataFinalize);
+	});
+
 	return;
 }
 
@@ -93,7 +97,8 @@ __SCThreadSpecificDataRef
 __SCGetThreadSpecificData()
 {
 	__SCThreadSpecificDataRef	tsd;
-	pthread_once(&tsKeyInitialized, __SCThreadSpecificKeyInitialize);
+
+	__SCThreadSpecificKeyInitialize();
 
 	tsd = pthread_getspecific(tsDataKey);
 	if (tsd == NULL) {
@@ -117,6 +122,39 @@ __SCGetThreadSpecificData()
 // from <CoreFoundation/ForFoundationOnly.h>
 extern CFStringRef _CFStringCreateWithFormatAndArgumentsAux(CFAllocatorRef alloc, CFStringRef (*copyDescFunc)(CFTypeRef, CFDictionaryRef), CFDictionaryRef formatOptions, CFStringRef format, va_list arguments);
 #endif	/* ENABLE_SC_FORMATTING */
+
+
+static CFComparisonResult
+compare_CFDate(const void *val1, const void *val2, void *context)
+{
+#pragma unused(context)
+	CFDateRef		str1	= (CFDateRef)val1;
+	CFDateRef		str2	= (CFDateRef)val2;
+
+	return CFDateCompare(str1, str2, 0);
+}
+
+
+static CFComparisonResult
+compare_CFNumber(const void *val1, const void *val2, void *context)
+{
+#pragma unused(context)
+	CFNumberRef		str1	= (CFNumberRef)val1;
+	CFNumberRef		str2	= (CFNumberRef)val2;
+
+	return CFNumberCompare(str1, str2, 0);
+}
+
+
+static CFComparisonResult
+compare_CFString(const void *val1, const void *val2, void *context)
+{
+#pragma unused(context)
+	CFStringRef		str1	= (CFStringRef)val1;
+	CFStringRef		str2	= (CFStringRef)val2;
+
+	return CFStringCompare(str1, str2, 0);
+}
 
 
 CFStringRef
@@ -300,13 +338,13 @@ _SCCopyDescription(CFTypeRef cf, CFDictionaryRef formatOptions)
 			}
 
 			if (isA_CFString(keys[0])) {
-				compFunc = (CFComparatorFunction)CFStringCompare;
+				compFunc = compare_CFString;
 			}
 			else if (isA_CFNumber(keys[0])) {
-				compFunc = (CFComparatorFunction)CFNumberCompare;
+				compFunc = compare_CFNumber;
 			}
 			else if (isA_CFDate(keys[0])) {
-				compFunc = (CFComparatorFunction)CFDateCompare;
+				compFunc = compare_CFDate;
 			}
 
 			if (compFunc != NULL) {

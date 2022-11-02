@@ -467,6 +467,17 @@ select_interface(int argc, char * const argv[])
 /* -------------------- */
 
 
+static CFComparisonResult
+compare_CFString(const void *val1, const void *val2, void *context)
+{
+#pragma unused(context)
+	CFStringRef		str1	= (CFStringRef)val1;
+	CFStringRef		str2	= (CFStringRef)val2;
+
+	return CFStringCompare(str1, str2, 0);
+}
+
+
 __private_extern__
 void
 _show_interface(SCNetworkInterfaceRef interface, CFStringRef prefix, Boolean showChild)
@@ -590,7 +601,10 @@ _show_interface(SCNetworkInterfaceRef interface, CFStringRef prefix, Boolean sho
 			cap_sorted = CFArrayCreateMutableCopy(NULL, 0, cap_names);
 			CFRelease(cap_names);
 
-			CFArraySortValues(cap_sorted, CFRangeMake(0, n), (CFComparatorFunction)CFStringCompare, NULL);
+			CFArraySortValues(cap_sorted,
+					  CFRangeMake(0, n),
+					  compare_CFString,
+					  NULL);
 
 			SCPrint(TRUE, stdout, CFSTR("%@  capabilities         = "), prefix);
 			for (i = 0; i < n; i++) {
@@ -1408,7 +1422,9 @@ static int
 __doCapability(CFStringRef key, const char *description, void *info, int argc, char * const argv[], CFMutableDictionaryRef newConfiguration)
 {
 #pragma unused(info)
-	Boolean	ok	= FALSE;
+	Boolean	b		= FALSE;
+	Boolean	ok		= FALSE;
+	Boolean	set_default	= FALSE;
 
 	if (argc < 1) {
 		SCPrint(TRUE, stdout,
@@ -1417,21 +1433,17 @@ __doCapability(CFStringRef key, const char *description, void *info, int argc, c
 		return -1;
 	}
 
-	if (strlen(argv[0]) == 0) {
-		ok = SCNetworkInterfaceSetCapability(net_interface, key, NULL);
-	} else if ((strcasecmp(argv[0], "disable") == 0) ||
-		   (strcasecmp(argv[0], "no"     ) == 0) ||
-		   (strcasecmp(argv[0], "off"    ) == 0) ||
-		   (strcasecmp(argv[0], "0"      ) == 0)) {
-		ok = SCNetworkInterfaceSetCapability(net_interface, key, CFNumberRef_0);
-	} else if ((strcasecmp(argv[0], "enable") == 0) ||
-		   (strcasecmp(argv[0], "yes"   ) == 0) ||
-		   (strcasecmp(argv[0], "on"    ) == 0) ||
-		   (strcasecmp(argv[0], "1"     ) == 0)) {
-		ok = SCNetworkInterfaceSetCapability(net_interface, key, CFNumberRef_1);
-	} else {
+	if (!get_bool_from_string(argv[0], FALSE, &b, &set_default)) {
 		SCPrint(TRUE, stdout, CFSTR("invalid value\n"));
 		return -1;
+	}
+
+	if (!set_default) {
+		ok = SCNetworkInterfaceSetCapability(net_interface,
+						     key,
+						     b ? CFNumberRef_1 : CFNumberRef_0);
+	} else {
+		ok = SCNetworkInterfaceSetCapability(net_interface, key, NULL);
 	}
 
 	if (ok) {

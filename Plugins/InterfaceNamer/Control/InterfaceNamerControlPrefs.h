@@ -1,15 +1,15 @@
 /*
- * Copyright (c) 2013, 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017, 2021 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,38 +17,43 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _IPMONITORCONTROLPREFS_H
-#define _IPMONITORCONTROLPREFS_H
+#ifndef _INTERFACENAMERCONTROLPREFS_H
+#define _INTERFACENAMERCONTROLPREFS_H
 
 /*
- * IPMonitorControlPrefs.h
- * - definitions for accessing IPMonitor control preferences and being notified
- *   when they change
+ * InterfaceNamerControlPrefs.h
+ * - definitions for accessing InterfaceNamer control preferences
  */
 
 /*
  * Modification History
  *
- * January 14, 2013	Dieter Siegmund (dieter@apple)
+ * January 12, 2017	Allan Nathanson (ajn@apple.com)
  * - created
  */
-#include <CoreFoundation/CFRunLoop.h>
-#include <SystemConfiguration/SCPreferences.h>
 
-typedef void (*IPMonitorControlPrefsCallBack)(SCPreferencesRef prefs);
+#include <sys/cdefs.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include "SCControlPrefs.h"
 
-SCPreferencesRef
-IPMonitorControlPrefsInit(CFRunLoopRef runloop,
-			  IPMonitorControlPrefsCallBack callback);
+__BEGIN_DECLS
+
+typedef void (*InterfaceNamerControlPrefsCallBack)(_SCControlPrefsRef control);
+
+_SCControlPrefsRef
+InterfaceNamerControlPrefsInit	(CFRunLoopRef				runloop,
+				 InterfaceNamerControlPrefsCallBack	callback);
 
 Boolean
-IPMonitorControlPrefsIsVerbose(void);
+InterfaceNamerControlPrefsAllowNewInterfaces	(void);
 
 Boolean
-IPMonitorControlPrefsSetVerbose(Boolean verbose);
+InterfaceNamerControlPrefsSetAllowNewInterfaces	(Boolean		allow);
 
-#endif /* _IPMONITORCONTROLPREFS_H */
+__END_DECLS
+
+#endif	/* _INTERFACENAMERCONTROLPREFS_H */

@@ -1,15 +1,15 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2022 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,35 +17,23 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _INTERFACENAMERCONTROLPREFS_H
-#define _INTERFACENAMERCONTROLPREFS_H
+#ifndef _SCINTERNAL_H
+#define _SCINTERNAL_H
 
 /*
- * InterfaceNamerControlPrefs.h
- * - definitions for accessing InterfaceNamer control preferences
+ * Internal status codes
+ * - handled on the framework (client) side and mapped to their respective
+ *   regular kSCStatus{AccessError,OK} codes before returning
  */
+enum {
+	kSCStatusAccessError_MissingAuthorization	= 10001,
+	kSCStatusAccessError_MissingWriteEntitlement	= 10002,
+	kSCStatusAccessError_MissingReadEntitlement	= 10003,
+	kSCStatusOK_MissingReadEntitlement		= 10100,
+};
 
-/*
- * Modification History
- *
- * January 12, 2017	Allan Nathanson (ajn@apple.com)
- * - created
- */
-
-typedef void (*InterfaceNamerControlPrefsCallBack)(SCPreferencesRef prefs);
-
-SCPreferencesRef
-InterfaceNamerControlPrefsInit	(CFRunLoopRef				runloop,
-				 InterfaceNamerControlPrefsCallBack	callback);
-
-Boolean
-InterfaceNamerControlPrefsAllowNewInterfaces	(void);
-
-Boolean
-InterfaceNamerControlPrefsSetAllowNewInterfaces	(Boolean		verbose);
-
-#endif /* _INTERFACENAMERCONTROLPREFS_H */
+#endif /* _SCINTERNAL_H */

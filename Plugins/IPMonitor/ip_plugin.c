@@ -4817,7 +4817,7 @@ merge_dns_servers(CFMutableDictionaryRef	new_dict,
 
 	ordered_servers = order_dns_servers(state_servers, active_protos);
 	accumulate_dns_servers(ordered_servers, active_protos,
-			       dns_servers, NULL);
+			       dns_servers, interface);
 	CFRelease(ordered_servers);
     }
 
@@ -5712,29 +5712,35 @@ get_rank_changes(CFStringRef serviceID, CFDictionaryRef state_options,
 
     interface = services_info_get_interface(services_info, serviceID);
     if (interface != NULL) {
-	if (!rank_assertion_is_set) {
-	    /* check for a rank assertion on the interface */
-	    CFNumberRef	if_rank = NULL;
+	/* check for a rank assertion on the interface */
+	Boolean		use_service_rank = TRUE;
+	CFNumberRef	if_rank = NULL;
+	Rank		if_rank_assertion;
+	Boolean		if_rank_assertion_is_set = FALSE;
 
-	    if (S_if_rank_dict != NULL) {
-		if_rank = CFDictionaryGetValue(S_if_rank_dict, interface);
-	    }
-	    rank_assertion
-		= InterfaceRankGetRankAssertion(if_rank,
-						&rank_assertion_is_set);
-#define kNotSetString	((CFTypeRef)CFSTR("not set"))
-	    my_log(LOG_INFO,
-		   "serviceID %@ interface %@ rank = 0x%x (%@)%s",
-		   serviceID,
-		   interface,
-		   rank_assertion,
-		   (if_rank != NULL) ? (CFTypeRef)if_rank : kNotSetString,
-		   ip_is_coupled ? " [coupled]" : "");
+	if (S_if_rank_dict != NULL) {
+	    if_rank = CFDictionaryGetValue(S_if_rank_dict, interface);
 	}
-	else {
+	if_rank_assertion
+	    = InterfaceRankGetRankAssertion(if_rank,
+					    &if_rank_assertion_is_set);
+	if (if_rank_assertion_is_set && rank_assertion_is_set) {
+	    /* both interface and service rank set, use more restrictive rank */
+	    if (if_rank_assertion > rank_assertion) {
+		rank_assertion = if_rank_assertion;
+		use_service_rank = FALSE;
+	    }
+	}
+	else if (if_rank_assertion_is_set) {
+	    use_service_rank = FALSE;
+	    rank_assertion_is_set = TRUE;
+	    rank_assertion = if_rank_assertion;
+	}
+	if (rank_assertion_is_set) {
 	    my_log(LOG_INFO,
-		   "serviceID %@ interface %@ rank = 0x%x%s",
+		   "serviceID %@ interface %@ rank = 0x%x (source=%s)%s",
 		   serviceID, interface, rank_assertion,
+		   use_service_rank ? "Service" : "Interface",
 		   ip_is_coupled ? " [coupled]" : "");
 	}
     }
@@ -8778,9 +8784,9 @@ prefs_changed_callback_init(void)
 #include "IPMonitorControlPrefs.h"
 
 static void
-prefs_changed(SCPreferencesRef prefs)
+prefs_changed(_SCControlPrefsRef control)
 {
-#pragma unused(prefs)
+#pragma unused(control)
     if (S_bundle_logging_verbose || IPMonitorControlPrefsIsVerbose()) {
 	S_IPMonitor_debug = kDebugFlagDefault;
 	S_IPMonitor_verbose = TRUE;
@@ -9221,6 +9227,17 @@ StartIPMonitorControlServer(void)
 
 #endif	/* !TARGET_OS_SIMULATOR && !defined(TEST_IPV4_ROUTELIST) && !defined(TEST_IPV6_ROUTELIST) && !defined(TEST_DNS) && !defined(TEST_DNS_ORDER) */
 
+static void
+HandleDNSConfigurationChanged(void)
+{
+    static const CFStringRef	key	= CFSTR(_PATH_RESOLVER_DIR);
+    CFArrayRef			keys;
+
+    keys = CFArrayCreate(NULL, (const void **)&key, 1, &kCFTypeArrayCallBacks);
+    IPMonitorProcessChanges(S_session, keys, NULL);
+    CFRelease(keys);
+}
+
 __private_extern__
 void
 load_IPMonitor(CFBundleRef bundle, Boolean bundleVerbose)
@@ -9286,7 +9303,7 @@ load_IPMonitor(CFBundleRef bundle, Boolean bundleVerbose)
     ip_plugin_init();
 
     if (S_session != NULL) {
-	dns_configuration_monitor(S_session, IPMonitorNotify);
+	dns_configuration_monitor(HandleDNSConfigurationChanged);
     }
 
 #if	!TARGET_OS_SIMULATOR && !defined(TEST_IPV4_ROUTELIST) && !defined(TEST_IPV6_ROUTELIST)
