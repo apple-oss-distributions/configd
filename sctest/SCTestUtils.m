@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -27,7 +27,7 @@
 #import <mach/mach_time.h>
 
 NSArray<NSString *> *
-getTestClasses()
+getTestClasses(void)
 {
 	static NSMutableArray *subclassNames = nil;
 	Class base;
@@ -51,6 +51,15 @@ getTestClasses()
 			}
 
 			if (superClass == base) {
+
+#if TARGET_OS_BRIDGE
+				// Only SCTestDynamicStore tests are allowed on BridgeOS.
+				NSString *className = (NSString *)@(class_getName(classList[i]));
+				if (!([className isEqualToString:@"SCTestDynamicStore"]
+				    || [className isEqualToString:@"SCTestUnitTest"])) {
+					continue;
+				}
+#endif // TARGET_OS_BRIDGE
 				[subclassNames addObject:@(class_getName(classList[i]))];
 			}
 		}
@@ -100,7 +109,11 @@ getOptionsDictionary(int argc, const char * const argv[])
 	int ch;
 	int i;
 	struct option entries[] = {
-		kSCTestOptionEntries
+		kSCTestOptionEntriesAllPlatforms
+#if !TARGET_OS_BRIDGE
+		kSCTestOptionEntriesNonBridgeOS
+#endif // !TARGET_OS_BRIDGE
+		{NULL, 0, NULL, 0}
 	};
 
 	options = [NSMutableDictionary dictionary];
@@ -112,6 +125,7 @@ getOptionsDictionary(int argc, const char * const argv[])
 		struct option opt = entries[i];
 		NSString *optKey = [NSString stringWithFormat:@"%s_Str", opt.name]; // ... "_Str" suffix is standardized across all keys.
 		id optVal = nil;
+		id existingValue = nil;
 
 		if (opt.has_arg) {
 			// Parse the optarg
@@ -135,7 +149,7 @@ getOptionsDictionary(int argc, const char * const argv[])
 		}
 
 		// Handle multiple option instances
-		id existingValue = options[optKey];
+		existingValue = options[optKey];
 		if (existingValue) {
 			if ([existingValue isKindOfClass:[NSMutableArray class]]) {
 				[(NSMutableArray *)existingValue addObject:optVal];

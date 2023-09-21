@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -34,6 +34,7 @@
 @property dispatch_queue_t callbackQ;
 @end
 
+#if !TARGET_OS_BRIDGE
 @implementation SCTestReachability
 
 + (NSString *)command
@@ -168,11 +169,11 @@ myReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReachabilityFla
 
 - (BOOL)unitTest
 {
+	BOOL allUnitTestsPassed = YES;
+
 	if(![self setup]) {
 		return NO;
 	}
-
-	BOOL allUnitTestsPassed = YES;
 
 	allUnitTestsPassed &= [self unitTestBasicReachabilityCheck];
 	allUnitTestsPassed &= [self unitTestReachabilityWithPolicy];
@@ -376,3 +377,4 @@ myReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReachabilityFla
 }
 
 @end
+#endif // !TARGET_OS_BRIDGE

@@ -51,7 +51,7 @@
 
 __private_extern__
 AuthorizationRef
-_prefs_AuthorizationCreate()
+_prefs_AuthorizationCreate(void)
 {
 	AuthorizationRef	authorization	= NULL;
 
@@ -189,7 +189,7 @@ _prefs_open(CFStringRef name, const char *path)
 
 __private_extern__
 void
-_prefs_save()
+_prefs_save(void)
 {
 	if (!SCPreferencesCommitChanges(prefs)) {
 		switch (SCError()) {
@@ -247,7 +247,7 @@ _prefs_save()
 
 __private_extern__
 void
-_prefs_close()
+_prefs_close(void)
 {
 	if (prefsPath != NULL) {
 		free(prefsPath);
@@ -644,7 +644,7 @@ do_setPref(char *pref, int argc, char * const argv[])
 
 __private_extern__
 void
-do_prefs_init()
+do_prefs_init(void)
 {
 	return;
 }
@@ -1103,6 +1103,46 @@ do_log(char * log, int argc, char * const argv[])
 	return;
 }
 
+
+static void
+disable_service_coupling_usage(void)
+{
+	fprintf(stderr,
+		"usage: scutil --" DISABLE_SERVICE_COUPLING " [on|off]\n");
+	return;
+}
+
+__private_extern__
+void
+do_disable_service_coupling(int argc, char * const argv[])
+{
+	Boolean	disable_coupling = FALSE;
+
+	if (argc > 1) {
+		disable_service_coupling_usage();
+		exit(1);
+	}
+	if (argc == 0) {
+		Boolean		val;
+
+		val = IPMonitorControlPrefsGetDisableServiceCoupling();
+		SCPrint(TRUE, stdout, CFSTR(DISABLE_SERVICE_COUPLING " is %s\n"),
+			on_off_str(val));
+		return;
+	}
+
+	if (!get_bool_from_string(argv[0], FALSE, &disable_coupling, NULL)) {
+		disable_service_coupling_usage();
+		exit(1);
+	}
+
+	if (!IPMonitorControlPrefsSetDisableServiceCoupling(disable_coupling)) {
+		SCPrint(TRUE, stderr, CFSTR("failed to set preferences\n"));
+		exit(2);
+	}
+
+	return;
+}
 
 /* -------------------- */
 

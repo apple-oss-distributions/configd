@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2017, 2022 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -36,7 +36,7 @@
 	CFSTR(SCDTEST_PREFIX "read-unrestricted-present.key")
 #define SCDTEST_READ_UNRESTRICTED_NOT_PRESENT_KEY		\
 	CFSTR(SCDTEST_PREFIX "read-unrestricted-not-present.key")
-
+#if !TARGET_OS_BRIDGE
 static void
 add_to_dict_and_array(CFMutableDictionaryRef dict,
 		      CFMutableArrayRef array,
@@ -45,7 +45,7 @@ add_to_dict_and_array(CFMutableDictionaryRef dict,
 	CFDictionarySetValue(dict, key, kCFBooleanTrue);
 	CFArrayAppendValue(array, key);
 }
-
+#endif
 @interface SCTestDynamicStore : SCTest
 @property SCDynamicStoreRef store;
 @property dispatch_semaphore_t sem;
@@ -72,10 +72,13 @@ add_to_dict_and_array(CFMutableDictionaryRef dict,
 						  CFSTR("SCTest"),
 						  NULL,
 						  NULL);
+#if !TARGET_OS_BRIDGE
+		// We want to send requests to a non-existent dynamic store in bridgeOS.
 		if (_store == NULL) {
 			SCTestLog("Could not create session");
 			ERR_EXIT;
 		}
+#endif
 	}
 	return self;
 }
@@ -90,40 +93,39 @@ add_to_dict_and_array(CFMutableDictionaryRef dict,
 
 - (void)start
 {
-	CFStringRef key;
+	CFStringRef key = NULL;
+	CFPropertyListRef value = NULL;
+
 	if (self.options[kSCTestDynamicStoreOptionDNS]) {
 		key = SCDynamicStoreKeyCreateNetworkGlobalEntity(kCFAllocatorDefault, kSCDynamicStoreDomainState, kSCEntNetDNS);
-		CFPropertyListRef value = SCDynamicStoreCopyValue(self.store, key);
+		value = SCDynamicStoreCopyValue(self.store, key);
 		SCTestLog("%@ : %@", key, value);
 		CFRelease(key);
 		if (value != NULL) {
 			CFRelease(value);
 		}
 	}
-
 	if (self.options[kSCTestDynamicStoreOptionIPv4]) {
 		key = SCDynamicStoreKeyCreateNetworkGlobalEntity(kCFAllocatorDefault, kSCDynamicStoreDomainState, kSCEntNetIPv4);
-		CFPropertyListRef value = SCDynamicStoreCopyValue(self.store, key);
+		value = SCDynamicStoreCopyValue(self.store, key);
 		SCTestLog("%@ : %@", key, value);
 		CFRelease(key);
 		if (value != NULL) {
 			CFRelease(value);
 		}
 	}
-
 	if (self.options[kSCTestDynamicStoreOptionIPv6]) {
 		key = SCDynamicStoreKeyCreateNetworkGlobalEntity(kCFAllocatorDefault, kSCDynamicStoreDomainState, kSCEntNetIPv6);
-		CFPropertyListRef value = SCDynamicStoreCopyValue(self.store, key);
+		value = SCDynamicStoreCopyValue(self.store, key);
 		SCTestLog("%@ : %@", key, value);
 		CFRelease(key);
 		if (value != NULL) {
 			CFRelease(value);
 		}
 	}
-
 	if (self.options[kSCTestDynamicStoreOptionProxies]) {
 		key = SCDynamicStoreKeyCreateNetworkGlobalEntity(kCFAllocatorDefault, kSCDynamicStoreDomainState, kSCEntNetProxies);
-		CFPropertyListRef value = SCDynamicStoreCopyValue(self.store, key);
+		value = SCDynamicStoreCopyValue(self.store, key);
 		SCTestLog("%@ : %@", key, value);
 		CFRelease(key);
 		if (value != NULL) {
@@ -146,15 +148,20 @@ add_to_dict_and_array(CFMutableDictionaryRef dict,
 
 - (BOOL)unitTest
 {
+	BOOL allUnitTestsPassed = YES;
+
 	if(![self setup]) {
 		return NO;
 	}
 
-	BOOL allUnitTestsPassed = YES;
+#if !TARGET_OS_BRIDGE
 	allUnitTestsPassed &= [self unitTestSetAndRemoveValue];
 	allUnitTestsPassed &= [self unitTestCopyMultiple];
 	allUnitTestsPassed &= [self unitTestSCDynamicStoreCallbackStress];
 	allUnitTestsPassed &= [self unitTestSCDynamicStoreSetMultipleStress];
+#else // !TARGET_OS_BRIDGE
+	allUnitTestsPassed &= [self unitTestSCDynamicStoreCopyValueReturnsNullOnBridgeOS];
+#endif // !TARGET_OS_BRIDGE
 
 	if(![self tearDown]) {
 		return NO;
@@ -167,6 +174,10 @@ add_to_dict_and_array(CFMutableDictionaryRef dict,
 {
 	return YES;
 }
+
+#if !TARGET_OS_BRIDGE
+#pragma mark -
+#pragma mark Non-BridgeOS SCDynamicStore Unit Tests
 
 - (BOOL)unitTestSetAndRemoveValue
 {
@@ -278,6 +289,7 @@ myTestCallback(SCDynamicStoreRef store, CFArrayRef changedKeys, void *ctx)
 	NSString *testKey = @"SCTest:/myTestKey";
 	BOOL ok;
 	dispatch_queue_t callbackQ;
+	SCDynamicStoreContext ctx;
 
 	test = [[SCTestDynamicStore alloc] initWithOptions:self.options];
 	if (test.store != NULL) {
@@ -285,7 +297,7 @@ myTestCallback(SCDynamicStoreRef store, CFArrayRef changedKeys, void *ctx)
 		test.store = NULL;
 	}
 
-	SCDynamicStoreContext ctx = {0, (__bridge void * _Nullable)(test), CFRetain, CFRelease, NULL};
+	ctx = (SCDynamicStoreContext){0, (__bridge void * _Nullable)(test), CFRetain, CFRelease, NULL};
 	test.store = SCDynamicStoreCreate(kCFAllocatorDefault, CFSTR("SCTest"), myTestCallback, &ctx);
 
 	ok = SCDynamicStoreSetNotificationKeys(test.store, (__bridge CFArrayRef)@[testKey], NULL);
@@ -338,6 +350,7 @@ myTestCallback(SCDynamicStoreRef store, CFArrayRef changedKeys, void *ctx)
 	BOOL ok;
 	dispatch_queue_t callbackQ;
 	const uint8_t waitTime = 1; // second
+	SCDynamicStoreContext ctx;
 
 	test = [[SCTestDynamicStore alloc] initWithOptions:self.options];
 	if (test.store != NULL) {
@@ -345,7 +358,7 @@ myTestCallback(SCDynamicStoreRef store, CFArrayRef changedKeys, void *ctx)
 		test.store = NULL;
 	}
 
-	SCDynamicStoreContext ctx = {0, (__bridge void * _Nullable)(test), CFRetain, CFRelease, NULL};
+	ctx = (SCDynamicStoreContext){0, (__bridge void * _Nullable)(test), CFRetain, CFRelease, NULL};
 	test.store = SCDynamicStoreCreate(kCFAllocatorDefault, CFSTR("SCTest"), myTestCallback, &ctx);
 	test.sem = dispatch_semaphore_create(0);
 
@@ -609,5 +622,44 @@ myTestCallback(SCDynamicStoreRef store, CFArrayRef changedKeys, void *ctx)
 	return YES;
 
 }
+
+#else // !TARGET_OS_BRIDGE
+#import <AssertMacros.h>
+
+#pragma mark -
+#pragma mark BridgeOS SCDynamicStore Unit Test
+
+- (BOOL)unitTestSCDynamicStoreCopyValueReturnsNullOnBridgeOS
+{
+	BOOL			ret = NO;
+	CFUUIDRef		uuid = NULL;
+	CFStringRef		uuidString = NULL;
+	CFStringRef		testKey = NULL;
+	CFPropertyListRef	plist = NULL;
+
+	uuid = CFUUIDCreate(kCFAllocatorDefault);
+	require_quiet(uuid, exit);
+	uuidString = CFUUIDCreateString(kCFAllocatorDefault, uuid);
+	require_quiet(uuidString, exit);
+	testKey = SCDynamicStoreKeyCreateNetworkServiceEntity(kCFAllocatorDefault, CFSTR("SCTest"), uuidString, kSCEntNetDNS);
+	require_quiet(testKey, exit);
+
+	plist = SCDynamicStoreCopyValue(NULL, testKey);
+	require_action_quiet(plist == NULL,
+			     exit,
+			     SCTestLog("FAILURE: %@, failed to get a NULL response from the SCDynamicStore on bridgeOS.",
+				       NSStringFromSelector(_cmd)));
+	SCTestLog("SUCCESS: %@", NSStringFromSelector(_cmd));
+	ret = YES;
+
+exit:
+	if (uuid != NULL) CFRelease(uuid);
+	if (uuidString != NULL) CFRelease(uuidString);
+	if (testKey != NULL) CFRelease(testKey);
+	if (plist != NULL) CFRelease(plist);
+	return ret;
+}
+
+#endif // !TARGET_OS_BRIDGE
 
 @end

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2022 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2023 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -870,6 +870,11 @@ updateInterfaces(SCDynamicStoreRef store, CFArrayRef newInterfaces)
 
 		interfaceName = CFArrayGetValueAtIndex(newInterfaces, i);
 
+		/* Do not update pktap interface */
+		if (CFStringHasPrefix(interfaceName, CFSTR("pktap"))) {
+			continue;
+		}
+
 		if ((n_old == 0) ||
 		    !CFArrayContainsValue(oldInterfaces,
 					  CFRangeMake(0, n_old),
@@ -1162,7 +1167,7 @@ load_LinkConfiguration(CFBundleRef bundle, Boolean bundleVerbose)
 }
 
 
-#ifdef	MAIN
+#ifdef TEST_LINKCONFIG
 
 
 #pragma mark -
@@ -1245,4 +1250,4 @@ main(int argc, char * const argv[])
 	exit(0);
 	return 0;
 }
-#endif
+#endif /* TEST_LINKCONFIG */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021 Apple Inc. All rights reserved.
+ * Copyright (c) 2020-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -48,6 +48,7 @@
 @property SCDynamicStoreRef	store;
 @end
 
+#if !TARGET_OS_BRIDGE
 @implementation SCTestInterfaceNamer
 
 + (NSString *)command
@@ -122,11 +123,12 @@ storeCallback(SCDynamicStoreRef store, CFArrayRef changedKeys, void *info)
 
 - (BOOL)unitTest
 {
+	BOOL allUnitTestsPassed = YES;
+
 	if(![self setup]) {
 		return NO;
 	}
 
-	BOOL allUnitTestsPassed = YES;
 	allUnitTestsPassed &= [self unitTestInsertRemoveOneInterface];
 	allUnitTestsPassed &= [self unitTestInsertRemoveMultipleInterfaces];
 	allUnitTestsPassed &= [self unitTestCheckIOKitQuiet];
@@ -719,3 +721,4 @@ create_hidden_interface(u_char ea_unique)
 }
 
 @end
+#endif // !TARGET_OS_BRIDGE

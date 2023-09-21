@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2017, 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,7 @@
 @property int counter;
 @end
 
+#if !TARGET_OS_BRIDGE
 @implementation SCTestPreferences
 
 + (NSString *)command
@@ -257,8 +258,10 @@ myNotificationsCallback(SCPreferencesRef prefs, SCPreferencesNotification notifi
 	dispatch_queue_t	callbackQ;
 	const int		iterations	= 10;
 	BOOL			ok		= FALSE;
-	SCTestPreferences	*test;
+	SCTestPreferences	*test		= NULL;
 	const int		timeout		= 1;	// second
+	NSDictionary		*prefsOptions	= NULL;
+	SCPreferencesContext	ctx;
 
 	test = [[SCTestPreferences alloc] initWithOptions:self.options];
 	if (test.prefs != NULL) {
@@ -268,8 +271,8 @@ myNotificationsCallback(SCPreferencesRef prefs, SCPreferencesNotification notifi
 
 	test.sem = dispatch_semaphore_create(0);
 
-	SCPreferencesContext ctx = {0, (__bridge void * _Nullable)(test), CFRetain, CFRelease, NULL};
-	NSDictionary *prefsOptions = @{(__bridge NSString *)kSCPreferencesOptionRemoveWhenEmpty:(__bridge NSNumber *)kCFBooleanTrue};
+	ctx = (SCPreferencesContext){0, (__bridge void * _Nullable)(test), CFRetain, CFRelease, NULL};
+	prefsOptions = @{(__bridge NSString *)kSCPreferencesOptionRemoveWhenEmpty:(__bridge NSNumber *)kCFBooleanTrue};
 	test.prefs = SCPreferencesCreateWithOptions(NULL,
 						    CFSTR("SCTest"),
 						    CFSTR("SCTestPreferences.plist"),
@@ -369,6 +372,7 @@ myNotificationsCallback(SCPreferencesRef prefs, SCPreferencesNotification notifi
 	Boolean			ok		= FALSE;
 	SCTestPreferences	*test;
 	const int		timeout		= 1;	// second
+	NSDictionary 		*prefsOptions	= NULL;
 
 	test = [[SCTestPreferences alloc] initWithOptions:self.options];
 	if (test.prefs != NULL) {
@@ -386,7 +390,7 @@ myNotificationsCallback(SCPreferencesRef prefs, SCPreferencesNotification notifi
 		}
 	});
 
-	NSDictionary *prefsOptions = @{(__bridge NSString *)kSCPreferencesOptionRemoveWhenEmpty:(__bridge NSNumber *)kCFBooleanTrue};
+	prefsOptions = @{(__bridge NSString *)kSCPreferencesOptionRemoveWhenEmpty:(__bridge NSNumber *)kCFBooleanTrue};
 	test.prefs = SCPreferencesCreateWithOptions(NULL,
 						    CFSTR("SCTest"),
 						    CFSTR(MANAGED_PREFERENCES_PATH "/" PREFS_OBSERVER_PLIST),
@@ -570,13 +574,15 @@ myNotificationsCallback(SCPreferencesRef prefs, SCPreferencesNotification notifi
 	}
 
 	for (NSString *key in keys) {
+		BOOL ok = NO;
+
 		NSString *valueString = (__bridge NSString *)SCPreferencesGetValue(test.prefs, (__bridge CFStringRef)key);
 		if (!valueString) {
 			SCTestLog("Failed to get value from preferences. Error: %s", SCErrorString(SCError()));
 			return NO;
 		}
 
-		BOOL ok = [values containsObject:valueString];
+		ok = [values containsObject:valueString];
 		if (!ok) {
 			SCTestLog("Incorrect value fetched from preferences");
 			return NO;
@@ -622,3 +628,4 @@ myNotificationsCallback(SCPreferencesRef prefs, SCPreferencesNotification notifi
 }
 
 @end
+#endif // !TARGET_OS_BRIDGE

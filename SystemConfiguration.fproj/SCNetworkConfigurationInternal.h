@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2022 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2023 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -45,7 +45,7 @@
 
 #define kAutoConfigure			CFSTR("AutoConfigure")
 
-typedef struct {
+typedef struct __SCNetworkSet {
 
 	// base CFType information
 	CFRuntimeBase		cfBase;
@@ -62,10 +62,12 @@ typedef struct {
 	// misc
 	Boolean			established;
 
+	// kCFBooleanTrue=default, kCFBooleanFalse=not default, NULL=unknown
+	CFBooleanRef		isDefault;
 } SCNetworkSetPrivate, *SCNetworkSetPrivateRef;
 
 
-typedef struct {
+typedef struct __SCNetworkService {
 
 	// base CFType information
 	CFRuntimeBase		cfBase;
@@ -91,7 +93,7 @@ typedef struct {
 } SCNetworkServicePrivate, *SCNetworkServicePrivateRef;
 
 
-typedef struct {
+typedef struct __SCNetworkProtocol {
 
 	// base CFType information
 	CFRuntimeBase		cfBase;
@@ -164,6 +166,8 @@ typedef struct __SCNetworkInterface {
 	Boolean			trustRequired;
 	Boolean			isEphemeral;
 	Boolean			isSelfNamed;
+	Boolean			isUserEthernet;
+	Boolean			supportsVMNETBridgedMode;
 	CFNumberRef		type;
 	CFNumberRef		unit;
 	CFNumberRef		family;
@@ -338,8 +342,9 @@ Boolean
 __SCNetworkInterfaceIsActive			(SCNetworkInterfaceRef	interface);
 
 Boolean
-__SCNetworkInterfaceIsMember			(SCPreferencesRef	prefs,
-						 SCNetworkInterfaceRef	interface);
+__SCNetworkInterfaceIsBusyMember		(SCPreferencesRef	prefs,
+						 SCNetworkInterfaceRef	interface,
+						 Boolean allow_configured);
 
 Boolean
 __SCNetworkInterfaceEntityIsPPTP		(CFDictionaryRef	entity);
@@ -405,7 +410,8 @@ __SCBondInterfaceSetMemberInterfaces		(SCBondInterfaceRef bond,
 
 void
 __SCBridgeInterfaceListCollectMembers		(CFArrayRef 		interfaces,
-						 CFMutableSetRef 	set);
+						 CFMutableSetRef 	set,
+						 Boolean		allow_configured);
 
 Boolean
 __SCBridgeInterfaceSetMemberInterfaces		(SCBridgeInterfaceRef	bridge,
@@ -743,6 +749,35 @@ _SCNetworkInterfaceIsWiFiInfra(SCNetworkInterfaceRef interface)
 		&& name != NULL && CFStringHasPrefix(name, CFSTR("en")));
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated"
+static inline CFDictionaryRef
+__SCNetworkConfigurationCopyQoSMarkingPolicyWithNewAllowListKey(CFDictionaryRef policy)
+{
+    CFArrayRef  whitelist;
+
+    if (policy == NULL) {
+	return NULL;
+    }
+    whitelist = CFDictionaryGetValue(policy, kSCPropNetQoSMarkingWhitelistedAppIdentifiers);
+    if (whitelist != NULL) {
+	CFArrayRef             allow;
+	CFMutableDictionaryRef policyCopy;
+
+	allow = CFDictionaryGetValue(policy, kSCPropNetQoSMarkingAllowListAppIdentifiers);
+	policyCopy = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, policy);
+	if (allow == NULL) {
+	    CFDictionarySetValue(policyCopy, kSCPropNetQoSMarkingAllowListAppIdentifiers, whitelist);
+	}
+	CFDictionaryRemoveValue(policyCopy, kSCPropNetQoSMarkingWhitelistedAppIdentifiers);
+	policy = (CFDictionaryRef)policyCopy;
+    }
+    else {
+	CFRetain(policy);
+    }
+    return policy;
+}
+#pragma GCC diagnostic pop
 
 __END_DECLS
 

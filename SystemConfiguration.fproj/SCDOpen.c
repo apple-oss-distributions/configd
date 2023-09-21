@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006, 2008-2022 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -40,6 +40,11 @@
 #include <mach/mach_error.h>
 #include <servers/bootstrap.h>
 #include <bootstrap_priv.h>
+
+#define SCD_HAS_USER_LOOKUP (!TARGET_OS_OSX && (!TARGET_OS_SIMULATOR || TARGET_OS_MACCATALYST))
+#if SCD_HAS_USER_LOOKUP
+#include <xpc/private.h>
+#endif // SCD_HAS_USER_LOOKUP
 
 #include "SCDynamicStoreInternal.h"
 #include "SCInternal.h"
@@ -145,7 +150,7 @@ get_sc_store_max(void)
 }
 
 static void
-add_state_handler()
+add_state_handler(void)
 {
 	os_state_block_t	state_block;
 
@@ -376,7 +381,7 @@ static const CFRuntimeClass __SCDynamicStoreClass = {
 
 
 static void
-childForkHandler()
+childForkHandler(void)
 {
 	/* the process has forked (and we are the child process) */
 
@@ -440,9 +445,7 @@ should_try_to_reconnect(void)
         return (TRUE);
 }
 
-
 #define	MAX_UNKNOWN_SERVICE_RETRY	3
-
 
 // Note: call when [dispatch] sync'd to storeQueue()
 static mach_port_t
@@ -473,6 +476,20 @@ __SCDynamicStoreServerPort(SCDynamicStorePrivateRef storePrivate, kern_return_t 
 
     again :
 
+#if	SCD_HAS_USER_LOOKUP
+	if (xpc_user_sessions_enabled()) {
+		errno_t error = 0;
+		uid_t target_user = xpc_user_sessions_get_foreground_uid(&error);
+		if (target_user == KAUTH_UID_NONE) {
+			SC_log(LOG_ERR, "xpc_user_sessions_get_foreground_uid() failed with error '%d'", error);
+			*status = BOOTSTRAP_UNKNOWN_SERVICE;
+		} else {
+			*status = bootstrap_look_up_per_user(bootstrap_port, server_name, target_user, &server);
+		}
+		goto status_switch;
+	}
+#endif	// SCD_HAS_USER_LOOKUP
+
 #if	defined(BOOTSTRAP_PRIVILEGED_SERVER) && !TARGET_OS_SIMULATOR
 	*status = bootstrap_look_up2(bootstrap_port,
 				     server_name,
@@ -489,6 +506,10 @@ __SCDynamicStoreServerPort(SCDynamicStorePrivateRef storePrivate, kern_return_t 
 #else	// defined(BOOTSTRAP_PRIVILEGED_SERVER) && !TARGET_OS_SIMULATOR
 	*status = bootstrap_look_up(bootstrap_port, server_name, &server);
 #endif	// defined(BOOTSTRAP_PRIVILEGED_SERVER) && !TARGET_OS_SIMULATOR
+
+#if	SCD_HAS_USER_LOOKUP
+status_switch:
+#endif	// SCD_HAS_USER_LOOKUP
 
 	switch (*status) {
 		case BOOTSTRAP_SUCCESS :
