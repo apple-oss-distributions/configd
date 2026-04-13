@@ -35,6 +35,13 @@ final class GNISubprocessRunner {
 		return formatter
 	}()
 
+	/// The timeout for the GNI subprocess.
+	private static let processTimeoutSeconds: TimeInterval = 15.0
+
+	// Thread-safe PID management - protected by pidLock
+	private static let pidLock = NSLock()
+	private nonisolated(unsafe) static var activePids: Set<pid_t> = []
+
 	final private class GNIOutputTargetFile: TextOutputStream {
 		private let filePath: FilePath
 		private let fileDescriptor: FileDescriptor
@@ -111,6 +118,7 @@ final class GNISubprocessRunner {
 			return nil
 		}
 		self.runnerStdoutTarget = runnerStdoutTarget
+		GNISubprocessRunner.setupSignalHandlers()
 	}
 
 	deinit {
@@ -119,6 +127,79 @@ final class GNISubprocessRunner {
 
 	var currentTimeString: String {
 		self.dateFormatter.string(from: Date())
+	}
+
+	// Thread-safe signal handler setup - protected by signalSetupLock
+	private static let signalSetupLock = NSLock()
+	private nonisolated(unsafe) static var signalHandlersSetup = false
+	private nonisolated(unsafe) static var signalSources: [DispatchSourceSignal] = []
+
+	private static func setupSignalHandlers() {
+		signalSetupLock.lock()
+		defer { signalSetupLock.unlock() }
+
+		guard !signalHandlersSetup else { return }
+		signalHandlersSetup = true
+
+		// Block the signals first so dispatch sources can handle them
+		var signalSet = sigset_t()
+		sigemptyset(&signalSet)
+		sigaddset(&signalSet, SIGTERM)
+		sigaddset(&signalSet, SIGINT)
+		pthread_sigmask(SIG_BLOCK, &signalSet, nil)
+
+		// Create dispatch sources for safe signal handling
+		let signalQueue = DispatchQueue(label: "com.apple.get-network-info.signals")
+
+		for signalNum in [SIGTERM, SIGINT] {
+			let signalSource = DispatchSource.makeSignalSource(signal: signalNum, queue: signalQueue)
+			signalSource.setEventHandler {
+				GNISubprocessRunner.killAllActiveProcesses()
+				// Clean up signal sources before exit
+				GNISubprocessRunner.cleanupSignalSources()
+				exit(1)
+			}
+			signalSource.resume()
+			signalSources.append(signalSource)
+		}
+	}
+
+	private static func cleanupSignalSources() {
+		signalSetupLock.lock()
+		defer { signalSetupLock.unlock() }
+
+		for source in signalSources {
+			source.cancel()
+		}
+		signalSources.removeAll()
+	}
+
+	private static func addActivePid(_ pid: pid_t) {
+		pidLock.lock()
+		defer { pidLock.unlock() }
+		activePids.insert(pid)
+	}
+
+	private static func removeActivePid(_ pid: pid_t) {
+		pidLock.lock()
+		defer { pidLock.unlock() }
+		activePids.remove(pid)
+	}
+
+	private static func killAllActiveProcesses() {
+		pidLock.lock()
+		let pids = Array(activePids)
+		pidLock.unlock()
+
+		for pid in pids {
+			kill(pid, SIGTERM)
+		}
+
+		usleep(500000) // Wait 500ms for graceful shutdown
+
+		for pid in pids {
+			kill(pid, SIGKILL)
+		}
 	}
 
 	public func log(_ message: String, at level: OSLogType = .default) {
@@ -130,13 +211,197 @@ final class GNISubprocessRunner {
 		log(message, at: .error)
 	}
 
-	public func run(command: String, stdout: String? = nil, stderr: String? = nil) -> (Bool, String?) {
+	// MARK: - Helper Methods
+
+	private func prepareOutputPaths(stdout: String?, stderr: String?) -> (stdoutPath: FilePath, stderrPath: FilePath)? {
+		let stdoutPath: FilePath
+		if stdout == "/dev/null" {
+			stdoutPath = FilePath("/dev/null")
+		} else if let stdout = stdout {
+			stdoutPath = pathRoot.appending(stdout)
+		} else {
+			let stdoutURL = FileManager.default.temporaryDirectory.appending(component: runnerTmpStdoutFilename.string)
+			guard let path = FilePath(stdoutURL) else {
+				errorlog("failed to create temporary file path at url '\(stdoutURL)'")
+				return nil
+			}
+			stdoutPath = path
+		}
+
+		let stderrPath: FilePath
+		if let stderr = stderr {
+			stderrPath = stderr == "/dev/null" ? FilePath("/dev/null") : pathRoot.appending(stderr)
+		} else {
+			stderrPath = stdoutPath
+		}
+
+		return (stdoutPath, stderrPath)
+	}
+
+	private func spawnProcess(binaryPath: String, argv: [UnsafeMutablePointer<CChar>?], stdoutPath: FilePath? = nil, stderrPath: FilePath? = nil) -> Int32 {
+		var fileActions: posix_spawn_file_actions_t? = nil
 		var err: Int32 = 0
+
+		// Only set up file redirection if paths are provided
+		if let stdoutPath = stdoutPath, let stderrPath = stderrPath {
+			err = posix_spawn_file_actions_init(&fileActions)
+			guard err == 0 else {
+				errorlog("posix_spawn_file_actions_init failed with error: \(err)")
+				return err
+			}
+
+			err = posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, stdoutPath.description, O_RDWR | O_APPEND, 0o644)
+			guard err == 0 else {
+				errorlog("posix_spawn_file_actions_addopen '\(STDOUT_FILENO)' failed with error '\(err)'")
+				return err
+			}
+
+			err = posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, stderrPath.description, O_RDWR | O_APPEND, 0o644)
+			guard err == 0 else {
+				errorlog("posix_spawn_file_actions_addopen '\(STDERR_FILENO)' failed with error '\(err)'")
+				return err
+			}
+		}
+
+		defer {
+			if fileActions != nil {
+				posix_spawn_file_actions_destroy(&fileActions)
+			}
+		}
+
+		var pid: pid_t = -1
+		err = posix_spawn(&pid, argv[0], &fileActions, nil, argv, environ)
+		guard err == 0 else {
+			errorlog("posix_spawn failed with error '\(err)'")
+			return err
+		}
+
+		GNISubprocessRunner.addActivePid(pid)
+
+		var status: Int32 = 0
+		var processExited = false
+		let dispatchGroup = DispatchGroup()
+		let processQueue = DispatchQueue(label: "com.apple.get-network-info.process-monitor")
+
+		// First attempt immediate check
+		var lastResult = waitpid(pid, &status, WNOHANG)
+		var lastErrno = errno
+		if lastResult == pid {
+			processExited = true
+			err = status
+		} else if lastResult == -1 {
+			err = lastErrno
+			processExited = true
+		} else {
+			// Process still running, set up dispatch sources for monitoring
+			dispatchGroup.enter()
+
+			// Simple atomic state management using dispatch queue serialization
+			var hasCompleted = false
+			let completionQueue = DispatchQueue(label: "com.apple.get-network-info.completion")
+
+			// Create process exit monitor
+			let processSource = DispatchSource.makeProcessSource(identifier: pid,
+									     eventMask: .exit,
+									     queue: processQueue)
+
+			// Create timeout timer
+			let timeoutSource = DispatchSource.makeTimerSource(queue: processQueue)
+			timeoutSource.schedule(deadline: .now() + GNISubprocessRunner.processTimeoutSeconds)
+
+			processSource.setEventHandler {
+				completionQueue.sync {
+					if !hasCompleted {
+						hasCompleted = true
+						timeoutSource.cancel()
+
+						lastResult = waitpid(pid, &status, WNOHANG)
+						lastErrno = errno
+						if lastResult == pid {
+							processExited = true
+							err = status
+						} else if lastResult == -1 {
+							err = lastErrno
+							processExited = true
+						}
+						dispatchGroup.leave()
+					}
+				}
+			}
+
+			timeoutSource.setEventHandler {
+				completionQueue.sync {
+					if !hasCompleted {
+						hasCompleted = true
+						processSource.cancel()
+						// processExited remains false to indicate timeout
+						dispatchGroup.leave()
+					}
+				}
+			}
+
+			// Check once more for race condition between dispatch source creation and activation
+			lastResult = waitpid(pid, &status, WNOHANG)
+			lastErrno = errno
+			if lastResult == pid {
+				processExited = true
+				err = status
+				dispatchGroup.leave()
+			} else if lastResult == -1 {
+				err = lastErrno
+				processExited = true
+				dispatchGroup.leave()
+			} else {
+				// Process still running, activate monitoring
+				processSource.resume()
+				timeoutSource.resume()
+			}
+
+			dispatchGroup.wait()
+		}
+
+		if !processExited {
+			errorlog("process \(pid) timed out after \(GNISubprocessRunner.processTimeoutSeconds) seconds, killing via SIGTERM")
+			kill(pid, SIGTERM)
+			usleep(500000) // Wait 500ms for graceful shutdown
+
+			// Check if process exited gracefully
+			let result = waitpid(pid, &status, WNOHANG)
+			if result != pid {
+				// Force kill if still running
+				errorlog("killing \(pid) via SIGKILL")
+
+				kill(pid, SIGKILL)
+				let _ = waitpid(pid, &status, 0) // Final cleanup
+			}
+			GNISubprocessRunner.removeActivePid(pid)
+			return -1
+		}
+
+		GNISubprocessRunner.removeActivePid(pid)
+
+		guard err == 0 else {
+			errorlog("process failed with status '\(err)'")
+			return err
+		}
+
+		return err
+	}
+
+	// MARK: - Public Methods
+
+	public func run(command: String, stdout: String? = nil, stderr: String? = nil) -> (Bool, String?) {
 		let arguments: [String] = command.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-		if (arguments.isEmpty) {
+		if arguments.isEmpty {
 			errorlog("gni received empty command")
 			return (false, nil)
 		}
+
+		guard FileManager.default.fileExists(atPath: arguments[0]) else {
+			errorlog("command '\(arguments[0])' doesn't exist")
+			return (false, nil)
+		}
+
 		var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { $0.withCString { strdup($0) } }
 		guard argv.count == arguments.count else {
 			errorlog("failed to create array of c strings from given command '\(command)'")
@@ -146,107 +411,84 @@ final class GNISubprocessRunner {
 		defer {
 			argv.forEach { free($0) }
 		}
-		var skipHeader: Bool = false
 
-		if arguments[0].hasSuffix("tar") || (stdout?.hasSuffix(".tar") ?? false) || (stdout?.hasSuffix(".plist") ?? false) {
-			skipHeader = true
-		}
-		guard FileManager.default.fileExists(atPath: arguments[0]) else {
-			errorlog("command '\(arguments[0])' doesn't exist")
+		let skipHeader = arguments[0].hasSuffix("tar") || (stdout?.hasSuffix(".tar") ?? false) || (stdout?.hasSuffix(".plist") ?? false)
+
+		log(command)
+
+		guard let paths = prepareOutputPaths(stdout: stdout, stderr: stderr) else {
 			return (false, nil)
 		}
 
-		// parent writes into its log file
-		log("\(command)")
-
-		// this redirects stdout and stderr accordingly
-		let stdoutPath: FilePath
-		let stderrPath: FilePath
-		if stdout == "/dev/null" {
-			stdoutPath = FilePath("/dev/null")
-		} else if stdout != nil {
-			stdoutPath = pathRoot.appending(stdout!)
-		} else {
-			let stdoutURL = FileManager.default.temporaryDirectory.appending(component: runnerTmpStdoutFilename.string)
-			guard let stdoutPath_ = FilePath(stdoutURL) else {
-				errorlog("failed to create temporary file path at url '\(stdoutURL)'")
-				return (false, nil)
-			}
-			stdoutPath = stdoutPath_
-		}
-		if stderr == nil {
-			stderrPath = stdoutPath
-		} else if stderr == "/dev/null" {
-			stderrPath = FilePath("/dev/null")
-		} else {
-			stderrPath = pathRoot.appending(stderr!)
-		}
-
-		guard let outputFile: GNIOutputTargetFile = GNIOutputTargetFile(filePath: stdoutPath) else {
-			errorlog("failed to create output file '\(stdoutPath)'")
+		guard let outputFile = GNIOutputTargetFile(filePath: paths.stdoutPath) else {
+			errorlog("failed to create output file '\(paths.stdoutPath)'")
 			return (false, nil)
 		}
 
 		if stdout != nil && !skipHeader {
-			// parent writes into subprocess output file
-			outputFile.write("#\n")
-			outputFile.write("# \(command)\n")
-			outputFile.write("#\n")
+			outputFile.write("#\n# \(command)\n#\n")
 		}
 
-		var fileActions: posix_spawn_file_actions_t? = nil
-		err = posix_spawn_file_actions_init(&fileActions)
-		defer {
-			posix_spawn_file_actions_destroy(&fileActions);
-		}
-		guard err == 0 else {
-			errorlog("posix_spawn_file_actions_init failed with error: \(err)")
-			return  (false, nil)
-		}
-
-		// child writes into subprocess output file
-		err = posix_spawn_file_actions_addopen(&fileActions,
-						       STDOUT_FILENO,
-						       stdoutPath.description,
-						       O_RDWR | O_APPEND,
-						       0o644)
-		guard err == 0 else {
-			errorlog("posix_spawn_file_actions_addopen '\(STDOUT_FILENO)' failed with error '\(err)'")
-			return  (false, nil)
-		}
-
-		// both stdout and stderr are redirected to the same output file
-		err = posix_spawn_file_actions_addopen(&fileActions,
-						       STDERR_FILENO,
-						       stderrPath.description,
-						       O_RDWR | O_APPEND,
-						       0o644)
-		guard err == 0 else {
-			errorlog("posix_spawn_file_actions_addopen '\(STDERR_FILENO)' failed with error '\(err)'")
-			return (false, nil)
-		}
-
-		var pid: pid_t = -1
-		err = posix_spawn(&pid, argv[0], &fileActions, nil, argv, environ)
-		guard err == 0 else {
-			errorlog("posix_spawn failed with error '\(err)'")
-			return (false, nil)
-		}
-
-		let _ = waitpid(pid, &err, 0)
-		guard err == 0 else {
-			errorlog("waitpid failed with error '\(err)'")
-			return (false, nil)
-		}
+		let err = spawnProcess(binaryPath: arguments[0], argv: argv, stdoutPath: paths.stdoutPath, stderrPath: paths.stderrPath)
 
 		var retstr: String? = nil
 		if stdout != nil {
 			outputFile.close()
 		} else {
-			// use this to deal with any temp files created for info we don't persist, like iflist
 			retstr = outputFile.readAll()
 			outputFile.close()
-			try? FileManager.default.removeItem(atPath: stdoutPath.description)
+			try? FileManager.default.removeItem(atPath: paths.stdoutPath.description)
+		}
+
+		return (err == 0, retstr)
+	}
+
+	public func runWithArgs(binaryPath: String, arguments: [String], stdout: String? = nil, stderr: String? = nil) -> (Bool, String?) {
+		guard FileManager.default.fileExists(atPath: binaryPath) else {
+			errorlog("command '\(binaryPath)' doesn't exist")
+			return (false, nil)
+		}
+
+		var argv: [UnsafeMutablePointer<CChar>?] = [binaryPath].map { $0.withCString { strdup($0) } }
+		argv += arguments.map { $0.withCString { strdup($0) } }
+		guard argv.count == (arguments.count + 1) else {
+			errorlog("failed to create array of c strings for '\(binaryPath)' with \(arguments.count) arguments")
+			return (false, nil)
+		}
+		argv += [nil]
+		defer {
+			argv.forEach { free($0) }
+		}
+
+		let skipHeader = binaryPath.hasSuffix("tar") || (stdout?.hasSuffix(".tar") ?? false) || (stdout?.hasSuffix(".plist") ?? false)
+		// Format arguments for display, quoting empty strings
+		let displayArgs = arguments.map { $0.isEmpty ? "\"\"" : $0 }
+		let commandStr = ([binaryPath] + displayArgs).joined(separator: " ")
+
+		log(commandStr)
+
+		guard let paths = prepareOutputPaths(stdout: stdout, stderr: stderr) else {
+			return (false, nil)
+		}
+
+		guard let outputFile = GNIOutputTargetFile(filePath: paths.stdoutPath) else {
+			errorlog("failed to create output file '\(paths.stdoutPath)'")
+			return (false, nil)
+		}
+
+		if stdout != nil && !skipHeader {
+			outputFile.write("#\n# \(commandStr)\n#\n")
+		}
+
+		let err = spawnProcess(binaryPath: binaryPath, argv: argv, stdoutPath: paths.stdoutPath, stderrPath: paths.stderrPath)
+
+		var retstr: String? = nil
+		if stdout != nil {
+			outputFile.close()
+		} else {
+			retstr = outputFile.readAll()
+			outputFile.close()
+			try? FileManager.default.removeItem(atPath: paths.stdoutPath.description)
 		}
 
 		return (err == 0, retstr)
@@ -260,19 +502,7 @@ final class GNISubprocessRunner {
 			argv.forEach { free($0) }
 		}
 
-		var pid: pid_t = -1
-		var err = posix_spawn(&pid, argv[0], nil, nil, argv, environ)
-		guard err == 0 else {
-			errorlog("posix_spawn failed with error '\(err)'")
-			return false
-		}
-
-		let _ = waitpid(pid, &err, 0)
-		guard err == 0 else {
-			errorlog("waitpid failed with error '\(err)'")
-			return false
-		}
-
+		let err = spawnProcess(binaryPath: arguments[0], argv: argv)
 		return err == 0
 	}
 

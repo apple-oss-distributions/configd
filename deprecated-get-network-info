@@ -227,15 +227,10 @@ run_ndp () {
 	echo "#"							>> ndp-info.txt
 	/usr/sbin/ndp -n -r						>> ndp-info.txt		2>&1
 
-	if [ -x /sbin/ifconfig ]; then
-		for if in ${IF_LIST}
-		do
-			echo "#"					>> ndp-info.txt
-			echo "# ndp -i ${if}"				>> ndp-info.txt
-			echo "#"					>> ndp-info.txt
-			/usr/sbin/ndp -i ${if}				>> ndp-info.txt		2>&1
-		done
-	fi
+	echo "#"							>> ndp-info.txt
+	echo "# ndp -i"							>> ndp-info.txt
+	echo "#"							>> ndp-info.txt
+	/usr/sbin/ndp -i						>> ndp-info.txt		2>&1
 
 }
 
@@ -686,14 +681,11 @@ run_scutil () {
 	echo "# scutil -d -v --nwi"					>> network-information.txt
 	echo "#"							>> network-information.txt
 	/usr/sbin/scutil -d -v --nwi					>> network-information.txt	2>&1
-	for if in ${IF_LIST}
-	do
-		echo ""							>> network-information.txt
-		echo "#"						>> network-information.txt
-		echo "# scutil --nwi ${if}"				>> network-information.txt
-		echo "#"						>> network-information.txt
-		scutil --nwi ${if}					>> network-information.txt	2>&1
-	done
+
+	echo "#"							>> network-information.txt
+	echo "# scutil --nwi -a"			>> network-information.txt
+	echo "#"							>> network-information.txt
+	scutil --nwi -a						>> network-information.txt	2>&1
 
 	echo "#"							>  dns-configuration.txt
 	echo "# scutil -d -v --dns"					>> dns-configuration.txt
@@ -851,6 +843,7 @@ start_pcap() {
 		echo "`date +"%Y-%m-%d %H:%M:%S"`: start_pcap"		>> get-network-info.txt
 		trap stop_pcap SIGINT
 		/usr/local/bin/netdiagnose -p "${REQUESTED_OUTDIR}" start sysdiagpcap		2>&1 	1>/dev/null
+		/usr/local/bin/netdiagnose -p "${REQUESTED_OUTDIR}" start droptappcap		2>&1 	1>/dev/null
 		PCAP_STARTED=1
 	fi
 }
@@ -859,6 +852,7 @@ stop_pcap () {
 	if [ ${PCAP_STARTED} -ne 0 ]; then
 		trap '' SIGINT
 		/usr/local/bin/netdiagnose stop sysdiagpcap					2>&1	1>/dev/null
+		/usr/local/bin/netdiagnose stop droptappcap					2>&1	1>/dev/null
 		echo "`date +"%Y-%m-%d %H:%M:%S"`: stop_pcap"		>> get-network-info.txt
 	fi
 }

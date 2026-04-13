@@ -35,7 +35,6 @@ final class GNICollector {
 	private let _collectNDFInformation: Bool
 	private let _collectSensitiveInformation: Bool
 	private let _disablePacketCapture: Bool
-	private var pcapRunning: Bool = false
 
 	init(_ outputDirectory: String, _ collectSystemConfigurationFiles: Bool, _ collectNDFInformation: Bool,
 	     _ collectSensitiveInformation: Bool, _ disablePacketCapture: Bool) {
@@ -119,23 +118,6 @@ final class GNICollector {
 	func collectDefaultInformation() -> Void {
 		collectInformation(runTableForDefaultCommands)
 
-		// ("/usr/sbin/netstat -qq -I %@",				"netstat.txt",				true)
-		// ("/usr/sbin/netstat -Q -I %@",				"netstat.txt",				true)
-		self.interfaceList.forEach { ifname in
-			let cmd = String(format: "/sbin/ifconfig -v %@", ifname)
-			let (_, ifconfigVerboseOutput) = gnisr.run(command: cmd)
-			guard let ifconfigVerboseOutput = ifconfigVerboseOutput else {
-				gnisr.errorlog("FAILED: '\(cmd)'")
-				return
-			}
-			if ifconfigVerboseOutput.contains("TXSTART") {
-				collectInformation([(String(format: "/usr/sbin/netstat -qq -I %@", ifname), "netstat.txt", false),])
-			}
-			if ifconfigVerboseOutput.contains("RXPOLL") {
-				collectInformation([(String(format: "/usr/sbin/netstat -Q -I %@", ifname), "netstat.txt", false),])
-			}
-		}
-
 		// ("/usr/sbin/ipconfig getsummary %@",				"ipconfig-info.txt",			true)
 		let (_, ipconfigIflistStr) = gnisr.run(command: "/usr/sbin/ipconfig getiflist")
 		if ipconfigIflistStr != nil {
@@ -147,13 +129,14 @@ final class GNICollector {
 			gnisr.errorlog("couldn't get interface list from ipconfig")
 		}
 
-		// ("pfctl -s all -a %@",					"pf.txt",				true)
+
+		// ("pfctl -l -s all -a %@",					"pf.txt",				true)
 		let (_, pfAnchorsListStr) = gnisr.run(command: "/sbin/pfctl -s Anchors -v", stderr: "/dev/null")
-		if pfAnchorsListStr != nil {
+		if pfAnchorsListStr != nil && pfAnchorsListStr!.isEmpty == false {
 			let pfAnchorsList: [String] = pfAnchorsListStr!.components(separatedBy: .whitespacesAndNewlines).filter {
 				!$0.isEmpty
 			}
-			collectInformation([("/sbin/pfctl -s all -a", "pf.txt", true),], pfAnchorsList)
+			collectInformation([("/sbin/pfctl -l -s all -a", "pf.txt", true),], pfAnchorsList)
 		} else {
 			gnisr.errorlog("couldn't get packet filter anchor list")
 		}
@@ -221,6 +204,17 @@ final class GNICollector {
 		let vpnInfoCopyTable: [(String, String)] = [("/var/log/vpnd.log", "vpnd.txt"),
 							    ("/var/log/racoon.log", "racoon.txt")]
 		copyInformation(vpnInfoCopyTable)
+
+		// ("/usr/sbin/scutil --rank \"\"",					"interface-rank-assertions.txt",false)
+		// ("/usr/sbin/scutil --advisory \"\"",					"interface-advisories.txt",	false)
+		// These require passing empty string arguments which can't be done via the run() string parser
+		for (flag, outputFile) in [("--rank", "interface-rank-assertions.txt"),
+		                            ("--advisory", "interface-advisories.txt")] {
+			let (success, _) = gnisr.runWithArgs(binaryPath: "/usr/sbin/scutil", arguments: [flag, ""], stdout: outputFile)
+			if !success {
+				gnisr.errorlog("FAILED: '/usr/sbin/scutil \(flag) \"\"'")
+			}
+		}
 	}
 
 	func collectNDFInformation() -> Void {
@@ -229,19 +223,21 @@ final class GNICollector {
 		collectInformation(runTableForNDFInfo)
 	}
 
-	func startPacketCapture() -> Bool {
-		if !self._disablePacketCapture {
-			let (success, _) = gnisr.run(command: "/usr/local/bin/netdiagnose -p \(gniDirectory) start sysdiagpcap",
-						     stdout: "/dev/null")
-			return success
+	func snapshotPacketCaptures() -> Void {
+		guard self._collectSensitiveInformation && !self._disablePacketCapture else {
+			return
 		}
-		return false
-	}
 
-	func stopPacketCapture() -> Void {
-		if !self._disablePacketCapture && self.pcapRunning {
-			let (_, _) = gnisr.run(command: "/usr/local/bin/netdiagnose stop sysdiagpcap",
-					       stdout: "/dev/null")
+		var cmd = "/usr/local/bin/netdiagnose -p \(gniDirectory) snapshot sysdiagpcap"
+		var (success, _) = gnisr.run(command: cmd, stdout: "/dev/null")
+		if !success {
+			gnisr.errorlog("FAILED: '\(cmd)'")
+		}
+
+		cmd = "/usr/local/bin/netdiagnose -p \(gniDirectory) snapshot droptappcap"
+		(success, _) = gnisr.run(command: cmd, stdout: "/dev/null")
+		if !success {
+			gnisr.errorlog("FAILED: '\(cmd)'")
 		}
 	}
 
@@ -249,8 +245,6 @@ final class GNICollector {
 		guard self._collectSensitiveInformation else {
 			return
 		}
-
-		self.pcapRunning = startPacketCapture()
 		collectInformation(runTableForSensitiveInfo)
 	}
 
@@ -302,12 +296,12 @@ final class GNICollector {
 	}
 
 	func collectAll() {
-		collectSensitiveInformation()
+		snapshotPacketCaptures()
 		collectDefaultInformation()
 		collectNDFInformation()
 		collectSystemConfigurationFiles()
 		collectExtraSystemConfigurationFiles()
-		stopPacketCapture()
+		collectSensitiveInformation()
 	}
 
 }
